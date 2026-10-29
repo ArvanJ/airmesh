@@ -475,6 +475,71 @@ const faceFx = {
   },
 };
 
+// ---- strings: neon string-art web stretched between both hands ----
+const THEMES = [
+  { name: "Normal", L: "#ffa53a", R: "#8fa8ff", bars: ["#ffe36b", "#ff5fd2", "#7dff6b", "#5fe0ff", "#c58bff"], star: "#c9d4ff" },
+  { name: "Cyberpunk", L: "#ff2bd6", R: "#00f0ff", bars: ["#ff2bd6", "#fffb00", "#00f0ff", "#ff2bd6", "#00f0ff"], star: "#ff9cf0" },
+  { name: "Lava", L: "#ff4a1c", R: "#ffb21c", bars: ["#ff2a00", "#ff6a00", "#ffb000", "#ffdd55", "#ff3d00"], star: "#ffb37a" },
+  { name: "Ocean", L: "#00c2ff", R: "#00ffc6", bars: ["#0077ff", "#00b3ff", "#00e5ff", "#5fffe0", "#b3fff5"], star: "#9fe8ff" },
+  { name: "Galaxy", L: "#b06bff", R: "#ff7bd5", bars: ["#6b5bff", "#b06bff", "#ff7bd5", "#7ad7ff", "#ffffff"], star: "#ffffff" },
+];
+const TIPS = [4, 8, 12, 16, 20], PALM = [0, 1, 5, 9, 13, 17, 0];
+let theme = 0;
+const themeDwell = THEMES.map(() => 0), webTrail = [];
+const stars = Array.from({ length: 140 }, () => ({ x: R(), y: R(), r: .5 + R() * 1.5, p: R() * TAU }));
+function glowLine(a, b, color, w) {
+  ctx.strokeStyle = color;
+  for (const [lw, al] of [[w * 3, .18], [w, .9]]) { ctx.globalAlpha = al; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  ctx.globalAlpha = .9; ctx.strokeStyle = "#fff"; ctx.lineWidth = w * .3; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+}
+const strings = {
+  name: "Strings", hidesHands: true,
+  get help() { return `raise both hands — your fingertips get strung together with light\nmove, spread and tilt your hands to weave the web\ntheme: ${THEMES[theme].name} (hover a theme or press T)`; },
+  draw(now, dt) {
+    const T = THEMES[theme];
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.fillStyle = T.star; // slow-falling twinkling stars
+    for (const s of stars) { ctx.globalAlpha = .35 + .35 * Math.sin(now / 600 + s.p); ctx.fillRect(s.x * W, (s.y * H + now * .004 * s.r) % H, s.r * 1.6, s.r * 1.6); }
+
+    if (hands.length === 2) {
+      const [A, B] = hands;
+      webTrail.push(TIPS.map(i => [A.s[i], B.s[i]]));
+      if (webTrail.length > 10) webTrail.shift();
+      // string art: every left fingertip to every right fingertip, with fading echoes of past frames
+      ctx.lineWidth = .8;
+      webTrail.forEach((snap, age) => {
+        for (let c = 0; c < 5; c++) {
+          ctx.globalAlpha = .05 + .25 * (age + 1) / webTrail.length; ctx.strokeStyle = T.bars[c]; ctx.beginPath();
+          for (let i = 0; i < 5; i++) { const j = (c + i) % 5; ctx.moveTo(snap[i][0].x, snap[i][0].y); ctx.lineTo(snap[j][1].x, snap[j][1].y); }
+          ctx.stroke();
+        }
+      });
+      ctx.globalAlpha = .2; ctx.strokeStyle = "#fff"; ctx.beginPath(); // joint-to-matching-joint fabric
+      for (let i = 0; i < 21; i++) { ctx.moveTo(A.s[i].x, A.s[i].y); ctx.lineTo(B.s[i].x, B.s[i].y); }
+      ctx.stroke();
+      TIPS.forEach((i, k) => glowLine(A.s[i], B.s[i], T.bars[k], 5)); // neon bars between matching fingertips
+    } else {
+      webTrail.length = 0;
+      for (const h of hands) { ctx.globalAlpha = .5; ctx.strokeStyle = T.bars[1]; ctx.lineWidth = 1; ctx.beginPath(); TIPS.forEach((i, k) => k ? ctx.lineTo(h.s[i].x, h.s[i].y) : ctx.moveTo(h.s[i].x, h.s[i].y)); ctx.closePath(); ctx.stroke(); }
+    }
+
+    // glowing hand outlines, left/right coloured by side of the screen
+    for (const h of hands) {
+      const col = h.s[0].x < W / 2 ? T.L : T.R;
+      ctx.globalAlpha = .1; ctx.fillStyle = col; ctx.beginPath(); PALM.forEach((i, k) => k ? ctx.lineTo(h.s[i].x, h.s[i].y) : ctx.moveTo(h.s[i].x, h.s[i].y)); ctx.fill();
+      ctx.strokeStyle = col;
+      for (const [lw, al] of [[14, .15], [3, 1]]) {
+        ctx.globalAlpha = al; ctx.lineWidth = lw; ctx.beginPath();
+        for (const [a, b] of CONN) { ctx.moveTo(h.s[a].x, h.s[a].y); ctx.lineTo(h.s[b].x, h.s[b].y); }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+    if (hands.length < 2) tag(hands.length ? "now raise your other hand" : "raise both hands", W / 2 - 90, H / 2);
+    chipRow(THEMES.map(t => t.name), theme, H - 110, themeDwell, dt, i => theme = i);
+  },
+};
+
 // ---- chip rows (fingertip dwell or click) ----
 const DWELL_MS = 700, rows = []; // rows drawn this frame, for click hit-testing
 function chipRow(names, active, y, dwell, dt, onPick) {
@@ -1023,7 +1088,7 @@ const xray = {
 };
 
 // ---- modes, bottom bar, keys ----
-const MODES = [parabola, portal, particles, paint, shapes, faceFx, xray];
+const MODES = [parabola, portal, particles, paint, shapes, faceFx, strings, xray];
 let mode = 0;
 const dwell = MODES.map(() => 0);
 const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
@@ -1031,6 +1096,7 @@ addEventListener("keydown", e => {
   const n = +e.key; if (n >= 1 && n <= MODES.length) mode = n - 1;
   if (e.key === "e") effect = (effect + 1) % EFFECTS.length;
   if (e.key === "k") kaleido = !kaleido;
+  if (e.key === "t") theme = (theme + 1) % THEMES.length;
   if (e.key === "c") strokes = [];
   if (e.key === "x") xr.explodeKey = !xr.explodeKey;
   if (e.key === "h") xr.style = 1 - xr.style;
@@ -1122,10 +1188,10 @@ function frame(now) {
   easeHands(dt);
   background();
   MODES[mode].draw(now, dt);
-  drawHands();
+  if (!MODES[mode].hidesHands) drawHands();
   sparkles(now);
   modeBar(dt);
-  const html = `${startError}<b>${MODES[mode].name.toUpperCase()}</b>\n${MODES[mode].help}\n\nhover a fingertip on a mode below to switch · keys 1–7`;
+  const html = `${startError}<b>${MODES[mode].name.toUpperCase()}</b>\n${MODES[mode].help}\n\nhover a fingertip on a mode below to switch · keys 1–${MODES.length}`;
   if (html !== hudHtml) hud.innerHTML = hudHtml = html; // only touch the DOM when the text changes
   requestAnimationFrame(frame);
 }
