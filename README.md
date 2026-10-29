@@ -1,8 +1,8 @@
-# HoloHands
+# AirMesh
 
-**Control a holographic workshop with your bare hands.** HoloHands is a browser playground that uses your webcam and computer vision to track both hands in real time. You can open camera-filter portals, sculpt 3D particles, paint in the air, weave neon strings, play a synthesizer and pull apart engines and cars like Tony Stark.
+**Control a holographic workshop with your bare hands.** AirMesh is a browser playground that uses your webcam and computer vision to track both hands in real time. You can open camera-filter portals, sculpt 3D particles, paint in the air, weave neon strings, play a synthesizer and pull apart engines and cars like Tony Stark.
 
-### ▶ Live: **https://arvanj.github.io/holohands/**
+### ▶ Live: **https://arvanj.github.io/airmesh/**
 
 There is nothing to install. Open the link, allow the camera, and raise your hands. Use desktop Chrome, Edge or Safari with a webcam.
 
@@ -30,7 +30,7 @@ Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoo
 - **Cutout, Ghost, Invisible, Predator and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
   - **Cutout:** puts you in space.
   - **Ghost:** shows you as a heat signature over a blueprint world.
-  - **Invisible:** makes you disappear. HoloHands keeps learning what the background looks like wherever you *aren't* standing, then paints that over you. Move around (or step aside for a second) so it can see behind you.
+  - **Invisible:** makes you disappear. AirMesh keeps learning what the background looks like wherever you *aren't* standing, then paints that over you. Move around (or step aside for a second) so it can see behind you.
   - **Predator:** a cloaking-device look. You turn see-through, the background bends through your outline and the edges shimmer.
   - **Echo:** leaves rainbow afterimages behind you as you move.
 
