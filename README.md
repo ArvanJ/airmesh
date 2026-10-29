@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a portal that makes you vanish, a hand-played synth and an exploding F1 hologram"></a>
-  <br><sub>▶ Click for the full launch video with sound</sub>
+  <br><sub>▶ Click for the full narrated launch video with sound</sub>
 </p>
 
 <p align="center"><b>Browser hand-tracking playground built by <a href="https://github.com/ArvanJ">@ArvanJ</a>, turning any webcam into an <a href="https://arvanj.github.io/airmesh/">Iron Man–style holographic workshop</a></b></p>
