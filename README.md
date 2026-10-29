@@ -39,7 +39,7 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | # | Mode | What your hands do |
 |---|------|--------------------|
 | 1 | **Portal** | Make an "L" with your thumb and index finger on **both** hands. The space between them becomes a live camera filter. **Tap thumb + index together** to switch to the next filter (or press **E**). |
-| 2 | **Particles 3D** | Hold up 1–5 left-hand fingers to pick a model: torus knot, DNA, galaxy, sphere or heart. Move your right hand to spin it, spread both hands to zoom and pinch to explode it. |
+| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere or heart. Move your right hand to spin it, spread both hands to zoom, and pinch and hold to explode it. |
 | 3 | **Air Paint** | Pinch thumb and index to draw glowing strokes. Hold a fist to clear (or press **C**). **K** turns on a kaleidoscope. |
 | 4 | **Shapes** | A glowing shape rides your palm. **Pass it hand to hand:** pinch with your empty hand and it flies over in an arc, morphing into the next shape and colour mid-air, then bursts into sparks when you catch it. With one hand, 1–5 fingers pick the shape and a pinch sets the brightness. |
 | 5 | **Strings** | Your fingertips are strung together with neon light. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). |

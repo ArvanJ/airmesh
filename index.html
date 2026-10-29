@@ -275,19 +275,24 @@ let model = 1, targets = [];
 const setModel = n => { model = n; targets = Array.from({ length: NP }, (_, i) => MODELS[n][1](i)); };
 setModel(1);
 const view = { yaw: 0, pitch: .3, vy: 0, vx: 0, zoom: 1, boom: 0, cx: W / 2, cy: H / 2 };
-let lastPalm = null;
+let lastPalm = null, pinchAt = [0, 0]; // pinchAt: when each hand's pinch closed; quick release = tap, held = explode
+const TAP_MS = 350;
 const particles = {
   name: "Particles 3D",
-  get help() { return `model: ${MODELS[model][0]} — left hand 1–5 fingers to change\nmove your right hand → spin · spread both hands → zoom\npinch → explode`; },
+  get help() { return `model: ${MODELS[model][0]} — tap thumb + index for the next one\nmove your right hand → spin · spread both hands → zoom\npinch and hold → explode`; },
   draw(now) {
-    const n = pickedCount(); if (MODELS[n] && n !== model) setModel(n);
+    hands.forEach((h, i) => {
+      if (h.pinch < PINCH && !pinchAt[i]) pinchAt[i] = now;
+      else if (h.pinch > .5 && pinchAt[i]) { if (now - pinchAt[i] < TAP_MS) setModel(model % 5 + 1); pinchAt[i] = 0; }
+    });
+    for (let i = hands.length; i < 2; i++) pinchAt[i] = 0;
     const drv = hands[hands.length - 1];
     if (drv) { const p = drv.s[9]; if (lastPalm) { view.vy += (p.x - lastPalm.x) * .0003; view.vx += (p.y - lastPalm.y) * .0003; } lastPalm = p; }
     else lastPalm = null;
     view.vy *= .94; view.vx *= .94;
     view.yaw += view.vy + .003; view.pitch = clamp(view.pitch + view.vx, -1.4, 1.4);
     if (hands.length === 2) view.zoom += (clamp(d(hands[0].s[8], hands[1].s[8]) / (W * .3), .4, 3) - view.zoom) * .15;
-    view.boom += ((hands.some(h => h.pinch < PINCH) ? 1 : 0) - view.boom) * .08;
+    view.boom += ((pinchAt.some(t => t && now - t > TAP_MS) ? 1 : 0) - view.boom) * .08;
     const tx = hands.length === 2 ? (hands[0].s[9].x + hands[1].s[9].x) / 2 : W / 2;
     const ty = hands.length === 2 ? (hands[0].s[9].y + hands[1].s[9].y) / 2 : H / 2;
     view.cx += (tx - view.cx) * .15; view.cy += (ty - view.cy) * .15;
