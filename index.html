@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Hand Shapes</title>
+<title>HoloHands</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: ui-monospace, Menlo, monospace; color: #dff; }
   #stage { position: fixed; inset: 0; width: 100%; height: 100%; }
@@ -86,33 +86,61 @@ function tag(text, x, y, color = "#7ff0e8") {
 // =====================================================================
 // MODE 2: Portal — thumb+index of both hands frame a live camera filter
 // =====================================================================
-const EFFECTS = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray"];
+const EFFECTS = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Cutout", "Ghost"];
+const SEG_FROM = 10; // effects from here on need the person/background mask
 const THERMAL = [[0, 0, 40], [90, 0, 170], [230, 0, 90], [255, 150, 0], [255, 255, 180]];
 const SPARK = [[255, 255, 255], [255, 120, 220], [255, 230, 120], [160, 255, 230]];
-const PIX = 6; // portal pixel size
+const PIX = 4; // portal pixel size
 const small = document.createElement("canvas"), sctx = small.getContext("2d", { willReadFrequently: true });
-let effect = -1, portalOpen = false, portalGone = 0;
-function fx(l, r, g, b) {
+const maskSrc = document.createElement("canvas"), mctx = maskSrc.getContext("2d");
+const maskSmall = document.createElement("canvas"), msctx = maskSmall.getContext("2d", { willReadFrequently: true });
+let effect = 0, tapped = [false, false], segMask = null; // tapped: per hand pinch held, so one tap = one switch
+const blueprint = l => l < .25 ? [8, 10, 70] : l < .5 ? [25, 40, 190] : l < .72 ? [60, 120, 255] : [190, 215, 255];
+const thermal = l => { const t = l * 3.999, i = Math.floor(t), f = t - i, p = THERMAL[i], q = THERMAL[i + 1];
+  return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]; };
+// l: luminance 0..1, gx/gy: Sobel gradient of l, m: person confidence 0..1, (x, y)/(w, h): pixel position
+function fx(l, r, g, b, gx, gy, m, x, y, w, h) {
+  const e = Math.min(1, Math.hypot(gx, gy) * 1.5);
   switch (effect) {
-    case 0: return l < .25 ? [8, 10, 70] : l < .5 ? [25, 40, 190] : l < .72 ? [60, 120, 255] : [190, 215, 255];
-    case 1: { const t = l * 3.999, i = Math.floor(t), f = t - i, p = THERMAL[i], q = THERMAL[i + 1];
-      return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]; }
+    case 0: return blueprint(l);
+    case 1: return thermal(l);
     case 2: { const q = Math.round(l * 4) / 4; return [0, q * 255, q * 90]; }
     case 3: return [b > 127 ? 255 : 0, r > 127 ? 230 : 20, g > 127 ? 255 : 60];
-    default: { const v = 255 - l * 255; return [v * .7, v * .9, v]; }
+    case 4: { const v = 255 - l * 255; return [v * .7, v * .9, v]; }
+    case 5: { const a = Math.atan2(gy, gx); return [e * (128 + 127 * Math.cos(a)), e * (128 + 127 * Math.cos(a + 2.09)), e * (128 + 127 * Math.cos(a + 4.19))]; }
+    case 6: return e > .35 ? [15, 15, 25] : [Math.min(255, Math.round(r / 64) * 70), Math.min(255, Math.round(g / 64) * 70), Math.min(255, Math.round(b / 64) * 70)];
+    case 7: { const v = 255 - Math.min(255, e * 400); return [v, v * .97, v * .9]; }
+    case 8: { const v = clamp(128 + (gx - gy) * 90, 0, 255); return [v, v, v * 1.05]; }
+    case 9: { const v = clamp(l * 1.2 + R() * .12 - (y % 2 ? .12 : 0), 0, 1); return [v * 40, v * 255, v * 60]; }
+    case 10: return m > .5 ? [Math.min(255, r * 1.15), Math.min(255, g * 1.15), Math.min(255, b * 1.15)]
+      : R() < .004 ? [255, 255, 255] : [20 + 50 * y / h, 0, 60 + 110 * x / w];
+    default: return m > .5 ? thermal(l) : blueprint(l);
   }
+}
+// person mask (video space) → the portal's mirrored low-res grid, drawn with the same transform as the video
+function maskPixels(w, h) {
+  const { w: mw, h: mh, data } = segMask;
+  if (maskSrc.width !== mw || maskSrc.height !== mh) { maskSrc.width = mw; maskSrc.height = mh; }
+  const mi = mctx.createImageData(mw, mh);
+  for (let i = 0; i < data.length; i++) { mi.data[i * 4] = data[i] * 255; mi.data[i * 4 + 3] = 255; }
+  mctx.putImageData(mi, 0, 0);
+  if (maskSmall.width !== w || maskSmall.height !== h) { maskSmall.width = w; maskSmall.height = h; }
+  msctx.save(); msctx.scale(1 / PIX, 1 / PIX); msctx.translate(W, 0); msctx.scale(-1, 1);
+  msctx.drawImage(maskSrc, map.ox, map.oy, map.dw, map.dh); msctx.restore();
+  return msctx.getImageData(0, 0, w, h).data;
 }
 const portal = {
   name: "Portal",
-  get help() { return `make an L with thumb + index on BOTH hands\nthe space between them becomes a live filter\nfilter: ${EFFECTS[Math.max(0, effect)]} — drop hands & reopen (or E) for next`; },
+  get help() { return `make an L with thumb + index on BOTH hands\nthe space between them becomes a live filter\nfilter: ${EFFECTS[effect]} — tap thumb + index together (or E) for the next one`; },
   draw() {
+    hands.forEach((h, i) => { // tap = pinch closes after being open (hysteresis stops flicker re-triggering)
+      if (h.pinch < PINCH && !tapped[i]) { tapped[i] = true; effect = (effect + 1) % EFFECTS.length; }
+      else if (h.pinch > .5) tapped[i] = false;
+    });
     if (hands.length < 2 || video.readyState < 2) {
-      if (++portalGone > 15) portalOpen = false;
       tag("raise both hands — thumb + index make the corners", W / 2 - 200, H / 2);
       return;
     }
-    if (!portalOpen) { effect = (effect + 1) % EFFECTS.length; portalOpen = true; }
-    portalGone = 0;
     const [L, Rh] = hands, quad = [L.s[8], Rh.s[8], Rh.s[4], L.s[4]];
 
     // low-res mirrored copy of the screen, recoloured per pixel
@@ -120,11 +148,19 @@ const portal = {
     if (small.width !== w || small.height !== h) { small.width = w; small.height = h; }
     sctx.save(); sctx.scale(1 / PIX, 1 / PIX); sctx.translate(W, 0); sctx.scale(-1, 1);
     sctx.drawImage(video, map.ox, map.oy, map.dw, map.dh); sctx.restore();
-    const img = sctx.getImageData(0, 0, w, h), px = img.data;
-    for (let i = 0; i < px.length; i += 4) {
-      const r = px[i], g = px[i + 1], b = px[i + 2], l = (.3 * r + .59 * g + .11 * b) / 255;
-      const c = l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, r, g, b);
-      px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2];
+    const img = sctx.getImageData(0, 0, w, h), px = img.data, n = w * h;
+    const lum = new Float32Array(n);
+    for (let i = 0; i < n; i++) lum[i] = (.3 * px[i * 4] + .59 * px[i * 4 + 1] + .11 * px[i * 4 + 2]) / 255;
+    const seg = effect >= SEG_FROM && segMask ? maskPixels(w, h) : null;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x, o = i * 4, l = lum[i];
+      let gx = 0, gy = 0; // Sobel, as in OpenCV's cv.Sobel with a 3x3 kernel
+      if (x > 0 && y > 0 && x < w - 1 && y < h - 1) {
+        gx = lum[i - w + 1] + 2 * lum[i + 1] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - 1] - lum[i + w - 1];
+        gy = lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1];
+      }
+      const c = effect < 5 && l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, px[o], px[o + 1], px[o + 2], gx, gy, seg ? seg[o] / 255 : 1, x, y, w, h);
+      px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2];
     }
     sctx.putImageData(img, 0, 0);
 
@@ -134,7 +170,8 @@ const portal = {
     ctx.strokeStyle = "#3b82f6"; ctx.lineWidth = 2; ctx.shadowColor = "#3b82f6"; ctx.shadowBlur = 12; ctx.stroke();
     ctx.restore();
     quad.forEach(p => marker(p.x, p.y));
-    tag(EFFECTS[effect].toUpperCase(), Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28, "#3b82f6");
+    if (effect >= SEG_FROM && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40, "#3b82f6");
+    tag(`${EFFECTS[effect].toUpperCase()}  ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28, "#3b82f6");
   },
 };
 
@@ -1095,13 +1132,14 @@ function sparkles(now) {
 // ---- hand tracking: inference runs in tracker.js (a worker), results eased onto the screen every frame ----
 const pair = c => [c.start ?? c[0], c.end ?? c[1]];
 CONN = HandLandmarker.HAND_CONNECTIONS.map(pair);
-const tracker = new Worker("tracker.js");
+const tracker = new Worker("tracker.js?v=2"); // bump when tracker.js changes: Pages caches it for 10 min
 let trackerReady = false, busy = false, lastVideoTime = -1, startError = "", target = [];
 tracker.onmessage = ({ data }) => {
   if (data.type === "ready") trackerReady = true;
   else if (data.type === "error") { busy = false; console.warn("tracker:", data.message); }
   else if (data.type === "result") {
     busy = false;
+    if (data.mask) segMask = data.mask;
     target = data.hands.map(lm => ({ lm, s: lm.map(toScreen), fingers: countFingers(lm), pinch: pinchOf(lm) })).sort((a, b) => a.s[0].x - b.s[0].x);
     const msg = target.length ? `TRACKING ${target.length} HAND${target.length > 1 ? "S" : ""}` : "NO HANDS";
     if (status.textContent !== msg) status.textContent = msg;
@@ -1123,7 +1161,7 @@ async function pump() {
   busy = true; lastVideoTime = video.currentTime;
   try {
     const bitmap = await createImageBitmap(video);
-    tracker.postMessage({ type: "frame", bitmap, t: performance.now() }, [bitmap]);
+    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: MODES[mode] === portal && effect >= SEG_FROM }, [bitmap]);
   } catch { busy = false; }
 }
 // glide on-screen points toward the latest detection, so motion is smooth at display rate between ~30 Hz results
