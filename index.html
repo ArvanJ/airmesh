@@ -517,13 +517,14 @@ const synth = {
     if (right) sy.pitch += ((right.s[9].y / H - .5) * 1.2 - sy.pitch) * .05;
     const cy = Math.cos(sy.yaw), sny = Math.sin(sy.yaw), cp = Math.cos(sy.pitch), sp = Math.sin(sy.pitch);
     const cx0 = W * .45, cy0 = H * .4, hue = sy.note < 0 ? 200 : (sy.note % 12) * 30, bins = audio?.bins;
+    const dot = Math.max(1.6, H / 400); // dots scale with the screen so the sphere stays bright on big displays
     ctx.save(); ctx.globalCompositeOperation = "lighter";
     for (const p of SPHERE) {
       const k = p.j * (1 + (bins ? bins[p.bin] / 255 * .45 : .03 * Math.sin(now / 400 + p.bin)));
       const x = (p.x * cy - p.z * sny) * k, z1 = (p.x * sny + p.z * cy) * k, y = p.y * k;
       const y2 = y * cp - z1 * sp, z = y * sp + z1 * cp, s = 2.4 / (3 + z);
-      ctx.fillStyle = `hsla(${hue + p.bin * 2}, 80%, ${55 + 25 * (bins ? bins[p.bin] / 255 : 0)}%, ${.25 + .55 * (1 - z) / 2})`;
-      ctx.fillRect(cx0 + x * sy.r * s, cy0 + y2 * sy.r * s, 1.6, 1.6);
+      ctx.fillStyle = `hsla(${hue + p.bin * 2}, 85%, ${60 + 30 * (bins ? bins[p.bin] / 255 : 0)}%, ${.4 + .6 * (1 - z) / 2})`;
+      ctx.fillRect(cx0 + x * sy.r * s, cy0 + y2 * sy.r * s, dot, dot);
     }
     ctx.restore();
 

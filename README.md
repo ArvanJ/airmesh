@@ -1,4 +1,28 @@
-# AirMesh
+<h1 align="center">AirMesh</h1>
+
+<p align="center">
+  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a portal that makes you vanish, a hand-played synth and an exploding F1 hologram"></a>
+  <br><sub>▶ Click for the full launch video with sound</sub>
+</p>
+
+<p align="center"><b>Browser hand-tracking playground built by <a href="https://github.com/ArvanJ">@ArvanJ</a>, turning any webcam into an <a href="https://arvanj.github.io/airmesh/">Iron Man–style holographic workshop</a></b></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/status-active-2ea44f" alt="status: active">
+  <img src="https://img.shields.io/badge/runtime-browser%20·%20no%20install-1f6feb" alt="runtime: browser, no install">
+  <img src="https://img.shields.io/badge/vision-MediaPipe%20hands%20%2B%20segmentation-b7791f" alt="vision: MediaPipe hands + segmentation">
+  <img src="https://img.shields.io/badge/stack-three.js%20%2B%20Web%20Audio%20%2B%20Canvas-24364b" alt="stack: three.js + Web Audio + Canvas">
+</p>
+
+<p align="center">
+  <a href="https://arvanj.github.io/airmesh/">Live Demo</a> ·
+  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4">Launch Video</a> ·
+  <a href="#modes">Modes</a> ·
+  <a href="#portal-filters">Portal Filters</a> ·
+  <a href="#how-it-works">How It Works</a>
+</p>
+
+---
 
 **Control a holographic workshop with your bare hands.** AirMesh is a browser playground that uses your webcam and computer vision to track both hands in real time. You can open camera-filter portals, sculpt 3D particles, paint in the air, weave neon strings, play a synthesizer and pull apart engines and cars like Tony Stark.
 
