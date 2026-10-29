@@ -540,6 +540,119 @@ const strings = {
   },
 };
 
+// ---- synth: hands play a synthesizer, an audio-reactive particle sphere dances to it ----
+const WAVES = ["sawtooth", "square", "triangle", "sine"], NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36].map(n => 48 + n); // C3 major pentatonic, 3 octaves
+const TIP_COL = { 4: "#ff8a2a", 8: "#4aa8ff", 12: "#b07bff", 16: "#3ee08a", 20: "#ff4a6a" };
+const SPHERE = Array.from({ length: 2600 }, (_, i) => { // fibonacci sphere
+  const y = 1 - 2 * (i + .5) / 2600, r = Math.sqrt(1 - y * y), t = i * 2.39996;
+  return { x: Math.cos(t) * r, y, z: Math.sin(t) * r, j: .92 + R() * .16, bin: (i * 7) % 48 };
+});
+let wave = 0;
+const waveDwell = WAVES.map(() => 0), sy = { yaw: 0, pitch: .3, r: 0, note: -1, cut: 0 };
+let audio = null;
+function startAudio() {
+  if (audio) return audio.ctx.resume();
+  const ac = new AudioContext(), mk = (type, det) => { const o = ac.createOscillator(); o.type = type; o.detune.value = det; o.start(); return o; };
+  const o1 = mk(WAVES[wave], -7), o2 = mk(WAVES[wave], 7), sub = mk("square", -1200);
+  const subG = ac.createGain(); subG.gain.value = .3;
+  const filter = ac.createBiquadFilter(); filter.type = "lowpass"; filter.Q.value = 6;
+  const amp = ac.createGain(); amp.gain.value = 0;
+  const delay = ac.createDelay(); delay.delayTime.value = .32;
+  const fb = ac.createGain(), wet = ac.createGain(), out = ac.createGain(); out.gain.value = .5;
+  const an = ac.createAnalyser(); an.fftSize = 128; an.smoothingTimeConstant = .75;
+  o1.connect(filter); o2.connect(filter); sub.connect(subG).connect(filter);
+  filter.connect(amp).connect(out); amp.connect(delay).connect(fb).connect(delay); delay.connect(wet).connect(out);
+  out.connect(an).connect(ac.destination);
+  audio = { ctx: ac, o: [o1, o2, sub], filter, amp, fb, wet, an, bins: new Uint8Array(an.frequencyBinCount) };
+}
+stage.addEventListener("click", () => MODES[mode] === synth && startAudio());
+const synth = {
+  name: "Synth", hidesHands: true, noSparks: true,
+  get help() { return audio ? `LEFT hand height → note · open hand plays, fist mutes\nRIGHT hand height → filter brightness · left/right → echo · pinch → wobble\nspread both hands → sphere size · M mutes` : "click anywhere (or press M) to turn the sound on"; },
+  leave() { audio?.amp.gain.setTargetAtTime(0, audio.ctx.currentTime, .05); },
+  draw(now, dt) {
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    const left = hands.find(h => hands.length === 2 ? h === hands[0] : h.s[0].x < W / 2);
+    const right = hands.find(h => hands.length === 2 ? h === hands[1] : h.s[0].x >= W / 2);
+
+    // ---- sound ----
+    let level = 0;
+    if (audio) {
+      const t = audio.ctx.currentTime, playing = left && left.fingers > 0 && !audio.muted;
+      if (left) {
+        const idx = clamp(Math.floor((1 - left.s[8].y / H) * SCALE.length), 0, SCALE.length - 1);
+        sy.note = SCALE[idx];
+        const f = 440 * 2 ** ((sy.note - 69) / 12);
+        audio.o.forEach(o => o.frequency.setTargetAtTime(f, t, .03));
+      }
+      audio.amp.gain.setTargetAtTime(playing ? .12 + .05 * left.fingers / 5 : 0, t, .04);
+      if (right) {
+        sy.cut = 150 * 2 ** ((1 - right.s[8].y / H) * 6.5);
+        audio.filter.frequency.setTargetAtTime(sy.cut, t, .05);
+        const echo = clamp(right.s[0].x / W - .5, 0, .5) * 2;
+        audio.fb.gain.setTargetAtTime(echo * .6, t, .1); audio.wet.gain.setTargetAtTime(echo * .7, t, .1);
+        const wob = right.pinch < PINCH ? 40 * Math.sin(now / 60) : 0; // vibrato while pinching
+        audio.o[0].detune.setTargetAtTime(-7 + wob, t, .01); audio.o[1].detune.setTargetAtTime(7 + wob, t, .01);
+      }
+      audio.o[0].type = audio.o[1].type = WAVES[wave];
+      audio.an.getByteFrequencyData(audio.bins);
+      for (let i = 0; i < 24; i++) level += audio.bins[i]; level /= 24 * 255;
+    }
+
+    // ---- particle sphere ----
+    const want = hands.length === 2 ? d(hands[0].s[9], hands[1].s[9]) * .55 : Math.min(W, H) * .2;
+    sy.r += (clamp(want, 60, Math.min(W, H) * .4) - sy.r) * .1;
+    sy.yaw += dt * (.0002 + level * .004);
+    if (right) sy.pitch += ((right.s[9].y / H - .5) * 1.2 - sy.pitch) * .05;
+    const cy = Math.cos(sy.yaw), sny = Math.sin(sy.yaw), cp = Math.cos(sy.pitch), sp = Math.sin(sy.pitch);
+    const cx0 = W * .45, cy0 = H * .4, hue = sy.note < 0 ? 200 : (sy.note % 12) * 30, bins = audio?.bins;
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (const p of SPHERE) {
+      const k = p.j * (1 + (bins ? bins[p.bin] / 255 * .45 : .03 * Math.sin(now / 400 + p.bin)));
+      const x = (p.x * cy - p.z * sny) * k, z1 = (p.x * sny + p.z * cy) * k, y = p.y * k;
+      const y2 = y * cp - z1 * sp, z = y * sp + z1 * cp, s = 2.4 / (3 + z);
+      ctx.fillStyle = `hsla(${hue + p.bin * 2}, 80%, ${55 + 25 * (bins ? bins[p.bin] / 255 : 0)}%, ${.25 + .55 * (1 - z) / 2})`;
+      ctx.fillRect(cx0 + x * sy.r * s, cy0 + y2 * sy.r * s, 1.6, 1.6);
+    }
+    ctx.restore();
+
+    // ---- note ladder on the right edge ----
+    ctx.save(); ctx.font = FONT; ctx.textBaseline = "middle";
+    SCALE.forEach((n, i) => {
+      const yy = H - (i + .5) * H / SCALE.length, on = n === sy.note && left;
+      ctx.fillStyle = on ? `hsl(${hue}, 90%, 60%)` : "rgba(255,255,255,.08)"; ctx.fillRect(W - (on ? 70 : 40), yy - H / SCALE.length / 2 + 1, on ? 70 : 40, H / SCALE.length - 2);
+      ctx.fillStyle = on ? "#000" : "rgba(255,255,255,.4)"; ctx.fillText(NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1), W - 32, yy);
+    });
+    if (audio) { ctx.fillStyle = "#7ff0e8"; ctx.fillText(`filter ${Math.round(sy.cut)} Hz${audio.muted ? " · MUTED" : ""}`, W / 2 - 60, cy0 + sy.r * 1.5 + 20); }
+    ctx.restore();
+
+    // ---- small live camera panel with fingertip rings ----
+    const pw = Math.min(340, W * .3), ph = pw * H / W, px = W - pw - 60, py = H - 130 - ph;
+    ctx.save(); ctx.fillStyle = "rgba(20,20,24,.9)"; ctx.strokeStyle = "rgba(255,255,255,.25)";
+    ctx.beginPath(); ctx.roundRect(px - 2, py - 34, pw + 4, ph + 36, 12); ctx.fill(); ctx.stroke();
+    ctx.font = FONT; ctx.fillStyle = "#ddd";
+    ctx.fillText(`Hand Tracking — ${left && right ? "BOTH" : left ? "LEFT" : right ? "RIGHT" : "NONE"}`, px + 10, py - 12);
+    ctx.fillStyle = hands.length ? "#f5c542" : "#555"; ctx.beginPath(); ctx.arc(px + pw - 50, py - 16, 5, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#ddd"; ctx.fillText("LIVE", px + pw - 40, py - 12);
+    ctx.beginPath(); ctx.rect(px, py, pw, ph); ctx.clip(); ctx.translate(px, py); ctx.scale(pw / W, ph / H);
+    if (video.readyState >= 2) { ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(video, map.ox, map.oy, map.dw, map.dh); ctx.restore(); }
+    ctx.lineWidth = 2.5 * W / pw;
+    for (const h of hands) {
+      ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.beginPath();
+      for (const [a, b] of CONN) { ctx.moveTo(h.s[a].x, h.s[a].y); ctx.lineTo(h.s[b].x, h.s[b].y); }
+      ctx.stroke();
+      for (const i of TIPS) {
+        ctx.strokeStyle = ctx.fillStyle = TIP_COL[i];
+        ctx.beginPath(); ctx.arc(h.s[i].x, h.s[i].y, 22, 0, TAU); ctx.globalAlpha = .35; ctx.fill(); ctx.globalAlpha = 1; ctx.stroke();
+        ctx.beginPath(); ctx.arc(h.s[i].x, h.s[i].y, 9, 0, TAU); ctx.fill();
+      }
+    }
+    ctx.restore();
+    chipRow(["Saw", "Square", "Triangle", "Sine"], wave, H - 110, waveDwell, dt, i => wave = i);
+  },
+};
+
 // ---- chip rows (fingertip dwell or click) ----
 const DWELL_MS = 700, rows = []; // rows drawn this frame, for click hit-testing
 function chipRow(names, active, y, dwell, dt, onPick) {
@@ -1088,7 +1201,7 @@ const xray = {
 };
 
 // ---- modes, bottom bar, keys ----
-const MODES = [parabola, portal, particles, paint, shapes, faceFx, strings, xray];
+const MODES = [parabola, portal, particles, paint, shapes, faceFx, strings, synth, xray];
 let mode = 0;
 const dwell = MODES.map(() => 0);
 const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
@@ -1096,6 +1209,7 @@ addEventListener("keydown", e => {
   const n = +e.key; if (n >= 1 && n <= MODES.length) mode = n - 1;
   if (e.key === "e") effect = (effect + 1) % EFFECTS.length;
   if (e.key === "k") kaleido = !kaleido;
+  if (e.key === "m" && MODES[mode] === synth) { if (!audio) startAudio(); else audio.muted = !audio.muted; }
   if (e.key === "t") theme = (theme + 1) % THEMES.length;
   if (e.key === "c") strokes = [];
   if (e.key === "x") xr.explodeKey = !xr.explodeKey;
@@ -1189,7 +1303,8 @@ function frame(now) {
   background();
   MODES[mode].draw(now, dt);
   if (!MODES[mode].hidesHands) drawHands();
-  sparkles(now);
+  if (!MODES[mode].noSparks) sparkles(now);
+  MODES.forEach(m => m !== MODES[mode] && m.leave?.());
   modeBar(dt);
   const html = `${startError}<b>${MODES[mode].name.toUpperCase()}</b>\n${MODES[mode].help}\n\nhover a fingertip on a mode below to switch · keys 1–${MODES.length}`;
   if (html !== hudHtml) hud.innerHTML = hudHtml = html; // only touch the DOM when the text changes
