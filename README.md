@@ -23,10 +23,16 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | 7 | **X-Ray** | A holographic 3D workshop. One open hand rotates the model, a pinch zooms and spreading both hands explodes it into parts. Point at a part to see what it does. Pick a car or machine from the dropdown in the bottom-right. |
 
 ### Portal filters
-Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Cutout** · **Ghost**
+Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Predator** · **Echo**
 
 - **Neon edges, Cartoon, Sketch and Emboss** use OpenCV-style image processing: a 3×3 Sobel gradient computed on every frame.
-- **Cutout and Ghost** use MediaPipe selfie segmentation to separate you from the background. Cutout puts you in space. Ghost shows you as a heat signature over a blueprint world.
+- **Glitch** tears the colour channels sideways in random bands, like a corrupted video signal.
+- **Cutout, Ghost, Invisible, Predator and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
+  - **Cutout:** puts you in space.
+  - **Ghost:** shows you as a heat signature over a blueprint world.
+  - **Invisible:** makes you disappear. HoloHands keeps learning what the background looks like wherever you *aren't* standing, then paints that over you. Move around (or step aside for a second) so it can see behind you.
+  - **Predator:** a cloaking-device look. You turn see-through, the background bends through your outline and the edges shimmer.
+  - **Echo:** leaves rainbow afterimages behind you as you move.
 
 ### X-Ray models
 - **Built in, animated:** F1 car (V6 hybrid, DRS, glowing brakes), running inline-4 engine (firing order 1-3-4-2) and jet engine.

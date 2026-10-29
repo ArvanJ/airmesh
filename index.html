@@ -86,8 +86,10 @@ function tag(text, x, y, color = "#7ff0e8") {
 // =====================================================================
 // MODE 2: Portal — thumb+index of both hands frame a live camera filter
 // =====================================================================
-const EFFECTS = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Cutout", "Ghost"];
-const SEG_FROM = 10; // effects from here on need the person/background mask
+const EFFECTS = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Glitch",
+  "Cutout", "Ghost", "Invisible", "Predator", "Echo"];
+const SEG_FX = ["Cutout", "Ghost", "Invisible", "Predator", "Echo"]; // these need the person/background mask
+const needsSeg = () => SEG_FX.includes(EFFECTS[effect]);
 const THERMAL = [[0, 0, 40], [90, 0, 170], [230, 0, 90], [255, 150, 0], [255, 255, 180]];
 const SPARK = [[255, 255, 255], [255, 120, 220], [255, 230, 120], [160, 255, 230]];
 const PIX = 4; // portal pixel size
@@ -95,26 +97,36 @@ const small = document.createElement("canvas"), sctx = small.getContext("2d", { 
 const maskSrc = document.createElement("canvas"), mctx = maskSrc.getContext("2d");
 const maskSmall = document.createElement("canvas"), msctx = maskSmall.getContext("2d", { willReadFrequently: true });
 let effect = 0, tapped = [false, false], segMask = null; // tapped: per hand pinch held, so one tap = one switch
+// per-frame buffers for fx(): src = untouched camera pixels, plate = learned empty background, echo = fading person trails
+let src, plate = null, echo = null, rowShift = [];
 const blueprint = l => l < .25 ? [8, 10, 70] : l < .5 ? [25, 40, 190] : l < .72 ? [60, 120, 255] : [190, 215, 255];
 const thermal = l => { const t = l * 3.999, i = Math.floor(t), f = t - i, p = THERMAL[i], q = THERMAL[i + 1];
   return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]; };
-// l: luminance 0..1, gx/gy: Sobel gradient of l, m: person confidence 0..1, (x, y)/(w, h): pixel position
-function fx(l, r, g, b, gx, gy, m, x, y, w, h) {
-  const e = Math.min(1, Math.hypot(gx, gy) * 1.5);
-  switch (effect) {
-    case 0: return blueprint(l);
-    case 1: return thermal(l);
-    case 2: { const q = Math.round(l * 4) / 4; return [0, q * 255, q * 90]; }
-    case 3: return [b > 127 ? 255 : 0, r > 127 ? 230 : 20, g > 127 ? 255 : 60];
-    case 4: { const v = 255 - l * 255; return [v * .7, v * .9, v]; }
-    case 5: { const a = Math.atan2(gy, gx); return [e * (128 + 127 * Math.cos(a)), e * (128 + 127 * Math.cos(a + 2.09)), e * (128 + 127 * Math.cos(a + 4.19))]; }
-    case 6: return e > .35 ? [15, 15, 25] : [Math.min(255, Math.round(r / 64) * 70), Math.min(255, Math.round(g / 64) * 70), Math.min(255, Math.round(b / 64) * 70)];
-    case 7: { const v = 255 - Math.min(255, e * 400); return [v, v * .97, v * .9]; }
-    case 8: { const v = clamp(128 + (gx - gy) * 90, 0, 255); return [v, v, v * 1.05]; }
-    case 9: { const v = clamp(l * 1.2 + R() * .12 - (y % 2 ? .12 : 0), 0, 1); return [v * 40, v * 255, v * 60]; }
-    case 10: return m > .5 ? [Math.min(255, r * 1.15), Math.min(255, g * 1.15), Math.min(255, b * 1.15)]
-      : R() < .004 ? [255, 255, 255] : [20 + 50 * y / h, 0, 60 + 110 * x / w];
-    default: return m > .5 ? thermal(l) : blueprint(l);
+const rainbow = a => [128 + 127 * Math.cos(a), 128 + 127 * Math.cos(a + 2.09), 128 + 127 * Math.cos(a + 4.19)];
+const at = (buf, stride, x, y, w, h) => (clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)) * stride;
+// l: luminance 0..1, gx/gy: Sobel gradient of l, m: person confidence 0..1, (x, y)/(w, h): pixel position, i: pixel index
+function fx(l, r, g, b, gx, gy, m, x, y, w, h, i) {
+  const e = Math.min(1, Math.hypot(gx, gy) * 1.5), cover = clamp((m - .25) / .3, 0, 1); // cover: how much "you" is here
+  switch (EFFECTS[effect]) {
+    case "Blueprint": return blueprint(l);
+    case "Thermal": return thermal(l);
+    case "Matrix": { const q = Math.round(l * 4) / 4; return [0, q * 255, q * 90]; }
+    case "Pop art": return [b > 127 ? 255 : 0, r > 127 ? 230 : 20, g > 127 ? 255 : 60];
+    case "X-ray": { const v = 255 - l * 255; return [v * .7, v * .9, v]; }
+    case "Neon edges": return rainbow(Math.atan2(gy, gx)).map(c => c * e);
+    case "Cartoon": return e > .35 ? [15, 15, 25] : [r, g, b].map(c => Math.min(255, Math.round(c / 64) * 70));
+    case "Sketch": { const v = 255 - Math.min(255, e * 400); return [v, v * .97, v * .9]; }
+    case "Emboss": { const v = clamp(128 + (gx - gy) * 90, 0, 255); return [v, v, v * 1.05]; }
+    case "Night vision": { const v = clamp(l * 1.2 + R() * .12 - (y % 2 ? .12 : 0), 0, 1); return [v * 40, v * 255, v * 60]; }
+    case "Glitch": { const s = rowShift[y], dim = y % 3 ? 1 : .7; // RGB channels torn sideways in random bands
+      return [src[at(src, 4, x + s + 3, y, w, h)] * dim, src[at(src, 4, x + s, y, w, h) + 1] * dim, src[at(src, 4, x + s - 3, y, w, h) + 2] * dim]; }
+    case "Cutout": return m > .5 ? [r, g, b].map(c => Math.min(255, c * 1.15)) : R() < .004 ? [255, 255, 255] : [20 + 50 * y / h, 0, 60 + 110 * x / w];
+    case "Ghost": return m > .5 ? thermal(l) : blueprint(l);
+    case "Invisible": { const o = i * 3; // swap "you" for the background learned from where you weren't
+      return [r + (plate[o] - r) * cover, g + (plate[o + 1] - g) * cover, b + (plate[o + 2] - b) * cover]; }
+    case "Predator": { const o = at(plate, 3, x + Math.round(gx * 5), y + Math.round(gy * 5), w, h), rim = cover * (1 - cover) * 4; // bent background + shimmering outline
+      return [r + (plate[o] - r) * cover + 40 * rim, g + (plate[o + 1] - g) * cover + 90 * rim, b + (plate[o + 2] - b) * cover + 100 * rim]; }
+    default: { const o = i * 3; return m > .5 ? [r, g, b] : [r * .6 + echo[o], g * .6 + echo[o + 1], b * .6 + echo[o + 2]]; } // Echo
   }
 }
 // person mask (video space) → the portal's mirrored low-res grid, drawn with the same transform as the video
@@ -127,12 +139,16 @@ function maskPixels(w, h) {
   if (maskSmall.width !== w || maskSmall.height !== h) { maskSmall.width = w; maskSmall.height = h; }
   msctx.save(); msctx.scale(1 / PIX, 1 / PIX); msctx.translate(W, 0); msctx.scale(-1, 1);
   msctx.drawImage(maskSrc, map.ox, map.oy, map.dw, map.dh); msctx.restore();
-  return msctx.getImageData(0, 0, w, h).data;
+  const m = msctx.getImageData(0, 0, w, h).data, tmp = new Uint8Array(w * h), out = new Uint8Array(w * h * 4);
+  // grow the mask 2px (separable max filter, like cv.dilate): the mask lags the video a frame, so this hides your outline
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let v = 0; for (let k = -2; k <= 2; k++) v = Math.max(v, m[(y * w + clamp(x + k, 0, w - 1)) * 4]); tmp[y * w + x] = v; }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let v = 0; for (let k = -2; k <= 2; k++) v = Math.max(v, tmp[clamp(y + k, 0, h - 1) * w + x]); out[(y * w + x) * 4] = v; }
+  return out;
 }
 const portal = {
   name: "Portal",
   get help() { return `make an L with thumb + index on BOTH hands\nthe space between them becomes a live filter\nfilter: ${EFFECTS[effect]} — tap thumb + index together (or E) for the next one`; },
-  draw() {
+  draw(now) {
     hands.forEach((h, i) => { // tap = pinch closes after being open (hysteresis stops flicker re-triggering)
       if (h.pinch < PINCH && !tapped[i]) { tapped[i] = true; effect = (effect + 1) % EFFECTS.length; }
       else if (h.pinch > .5) tapped[i] = false;
@@ -151,7 +167,21 @@ const portal = {
     const img = sctx.getImageData(0, 0, w, h), px = img.data, n = w * h;
     const lum = new Float32Array(n);
     for (let i = 0; i < n; i++) lum[i] = (.3 * px[i * 4] + .59 * px[i * 4 + 1] + .11 * px[i * 4 + 2]) / 255;
-    const seg = effect >= SEG_FROM && segMask ? maskPixels(w, h) : null;
+    const seg = needsSeg() && segMask ? maskPixels(w, h) : null;
+    src = px.slice();
+    if (seg) { // keep learning the empty background wherever you aren't; trails fade and get repainted where you are
+      if (!plate || plate.length !== n * 3) { plate = new Float32Array(n * 3); echo = new Float32Array(n * 3); for (let i = 0; i < n * 3; i++) plate[i] = src[(i / 3 | 0) * 4 + i % 3]; }
+      const col = rainbow(now / 300);
+      for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) {
+        const o = i * 3 + k;
+        if (seg[i * 4] < 64) plate[o] += (src[i * 4 + k] - plate[o]) * .25;
+        echo[o] = seg[i * 4] > 128 ? col[k] * .8 : echo[o] * .93;
+      }
+    }
+    if (EFFECTS[effect] === "Glitch") { // bands of rows share a random sideways tear
+      let sh = 0; rowShift = [];
+      for (let y = 0; y < h; y++) { if (R() < .06) sh = R() < .4 ? 0 : Math.round(R() * 24 - 12); rowShift.push(sh); }
+    }
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x, o = i * 4, l = lum[i];
       let gx = 0, gy = 0; // Sobel, as in OpenCV's cv.Sobel with a 3x3 kernel
@@ -159,7 +189,8 @@ const portal = {
         gx = lum[i - w + 1] + 2 * lum[i + 1] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - 1] - lum[i + w - 1];
         gy = lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1];
       }
-      const c = effect < 5 && l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, px[o], px[o + 1], px[o + 2], gx, gy, seg ? seg[o] / 255 : 1, x, y, w, h);
+      const c = needsSeg() && !seg ? [px[o], px[o + 1], px[o + 2]] // plain camera until the first mask arrives
+        : effect < 5 && l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, px[o], px[o + 1], px[o + 2], gx, gy, seg ? seg[o] / 255 : 1, x, y, w, h, i);
       px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2];
     }
     sctx.putImageData(img, 0, 0);
@@ -170,7 +201,7 @@ const portal = {
     ctx.strokeStyle = "#3b82f6"; ctx.lineWidth = 2; ctx.shadowColor = "#3b82f6"; ctx.shadowBlur = 12; ctx.stroke();
     ctx.restore();
     quad.forEach(p => marker(p.x, p.y));
-    if (effect >= SEG_FROM && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40, "#3b82f6");
+    if (needsSeg() && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40, "#3b82f6");
     tag(`${EFFECTS[effect].toUpperCase()}  ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28, "#3b82f6");
   },
 };
@@ -1161,7 +1192,7 @@ async function pump() {
   busy = true; lastVideoTime = video.currentTime;
   try {
     const bitmap = await createImageBitmap(video);
-    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: MODES[mode] === portal && effect >= SEG_FROM }, [bitmap]);
+    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: MODES[mode] === portal && needsSeg() }, [bitmap]);
   } catch { busy = false; }
 }
 // glide on-screen points toward the latest detection, so motion is smooth at display rate between ~30 Hz results
