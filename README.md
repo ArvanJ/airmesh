@@ -34,7 +34,7 @@ There is nothing to install. Open the link, allow the camera, and raise your han
 
 ## Modes
 
-Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, by clicking, or with keys **1–7**.
+Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, by clicking, or with keys **1–8**.
 
 | # | Mode | What your hands do |
 |---|------|--------------------|
@@ -43,8 +43,9 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | 3 | **Air Paint** | Pinch thumb and index to draw glowing strokes. Hold a fist to clear (or press **C**). **K** turns on a kaleidoscope. |
 | 4 | **Shapes** | A glowing shape rides your palm. **Pass it hand to hand:** pinch with your empty hand and it flies over in an arc, morphing into the next shape and colour mid-air, then bursts into sparks when you catch it. With one hand, 1–5 fingers pick the shape and a pinch sets the brightness. |
 | 5 | **Strings** | Your fingertips are strung together with neon light. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). |
-| 6 | **Synth** | Your left hand's height plays notes on a pentatonic scale. An open hand plays and a fist mutes. Your right hand controls the filter, echo and vibrato (pinch). An audio-reactive particle sphere dances to the sound. Click once (or press **M**) to turn on audio. |
-| 7 | **X-Ray** | A holographic 3D workshop. One open hand rotates the model, a pinch zooms and spreading both hands explodes it into parts. Point at a part to see what it does. Pick a car or machine from the dropdown in the bottom-right. |
+| 6 | **Synth** | Your left hand's height plays notes on a pentatonic scale. An open hand plays and a fist mutes. Your right hand controls the filter, echo and vibrato (pinch). Five live visualizers read the real audio: **Spectrum**, **Ring**, **Scope**, **Orbit** (an X/Y phase scope, so a sine draws a circle and a square draws a square) and **Sphere** (press **V**). Add a **drum machine** to play over: Four, Hip-hop or Breaks at 110 BPM (press **B**). Click once (or press **M**) to turn on audio. |
+| 7 | **Sky** | Move the heavens. Raise both arms and a long-exposure star-trail sky starts turning; turn your hands like a steering wheel to spin it faster (or sweep one hand). Person segmentation keeps *you* in front of the stars, standing on moonlit dunes. |
+| 8 | **X-Ray** | A holographic 3D workshop. One open hand rotates the model, a pinch zooms and spreading both hands explodes it into parts. Point at a part to see what it does. Pick a car or machine from the dropdown in the bottom-right. |
 
 ### Portal filters
 Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Predator** · **Echo**

@@ -476,7 +476,7 @@ const strings = {
   },
 };
 
-// ---- synth: hands play a synthesizer, an audio-reactive particle sphere dances to it ----
+// ---- synth: hands play a synthesizer, live audio visualizers react to it ----
 const WAVES = ["sawtooth", "square", "triangle", "sine"], NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28, 31, 33, 36].map(n => 48 + n); // C3 major pentatonic, 3 octaves
 const TIP_COL = { 4: "#ff8a2a", 8: "#4aa8ff", 12: "#b07bff", 16: "#3ee08a", 20: "#ff4a6a" };
@@ -484,8 +484,49 @@ const SPHERE = Array.from({ length: 2600 }, (_, i) => { // fibonacci sphere
   const y = 1 - 2 * (i + .5) / 2600, r = Math.sqrt(1 - y * y), t = i * 2.39996;
   return { x: Math.cos(t) * r, y, z: Math.sin(t) * r, j: .92 + R() * .16, bin: (i * 7) % 48 };
 });
-let wave = 0;
-const waveDwell = WAVES.map(() => 0), sy = { yaw: 0, pitch: .3, r: 0, note: -1, cut: 0 };
+let wave = 0, vis = 1;
+const VISUALS = ["Spectrum", "Ring", "Scope", "Orbit", "Sphere"], visDwell = VISUALS.map(() => 0);
+const BANDS = new Float32Array(64), peaks = new Float32Array(64), idleBins = new Uint8Array(512), idleWave = new Uint8Array(1024);
+// FFT bins → log-spaced bands, so bass and treble get fair space like a real analyser display
+function bands(bins, out) {
+  const n = out.length, top = bins.length - 1;
+  for (let i = 0; i < n; i++) {
+    const lo = Math.floor(top ** (i / n)), hi = Math.max(lo + 1, Math.floor(top ** ((i + 1) / n)));
+    let s = 0; for (let k = lo; k < hi; k++) s += bins[k]; out[i] = s / (hi - lo) / 255;
+  }
+  return out;
+}
+const waveDwell = WAVES.map(() => 0), sy = { yaw: 0, pitch: .3, r: 0, note: -1, cut: 0, gain: 1 };
+// drum machine: 16-step patterns at 110 BPM, scheduled ahead on the audio clock so it never drifts
+const BEATS = ["No beat", "Four", "Hip-hop", "Breaks"], beatDwell = BEATS.map(() => 0), BPM = 110, STEP = 60 / BPM / 4;
+const PATTERNS = { // k kick, s snare, h hat
+  "Four": { k: "x...x...x...x...", s: "....x.......x...", h: "..x...x...x...x." },
+  "Hip-hop": { k: "x......x..x.....", s: "....x.......x...", h: "x.x.x.x.x.x.x.x." },
+  "Breaks": { k: "x.........x.....", s: "....x..x.x..x...", h: "x.xxx.x.x.xxx.x." },
+};
+let beat = 0;
+function drum(kind, t) {
+  const ac = audio.ctx, g = ac.createGain(); g.connect(audio.beatBus);
+  if (kind === "k") {
+    const o = ac.createOscillator(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + .12);
+    g.gain.setValueAtTime(1, t); g.gain.exponentialRampToValueAtTime(.001, t + .35); o.connect(g); o.start(t); o.stop(t + .4);
+  } else {
+    const n = ac.createBufferSource(), f = ac.createBiquadFilter(); n.buffer = audio.noise;
+    f.type = kind === "s" ? "bandpass" : "highpass"; f.frequency.value = kind === "s" ? 1800 : 7000;
+    const len = kind === "s" ? .16 : .04;
+    g.gain.setValueAtTime(kind === "s" ? .55 : .16, t); g.gain.exponentialRampToValueAtTime(.001, t + len);
+    n.connect(f).connect(g); n.start(t); n.stop(t + len + .02);
+  }
+}
+function scheduleBeat() {
+  if (!audio || !beat || audio.muted) return;
+  const p = PATTERNS[BEATS[beat]], now = audio.ctx.currentTime;
+  if (audio.next < now) { audio.next = now + .05; audio.step = 0; audio.beatStart = audio.next; }
+  while (audio.next < now + .12) { // look ahead ~2 frames; the audio clock places each hit exactly
+    for (const k of "ksh") if (p[k][audio.step % 16] === "x") drum(k, audio.next);
+    audio.step++; audio.next += STEP;
+  }
+}
 let audio = null;
 function startAudio() {
   if (audio) return audio.ctx.resume();
@@ -496,16 +537,18 @@ function startAudio() {
   const amp = ac.createGain(); amp.gain.value = 0;
   const delay = ac.createDelay(); delay.delayTime.value = .32;
   const fb = ac.createGain(), wet = ac.createGain(), out = ac.createGain(); out.gain.value = .5;
-  const an = ac.createAnalyser(); an.fftSize = 128; an.smoothingTimeConstant = .75;
+  const an = ac.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = .8;
   o1.connect(filter); o2.connect(filter); sub.connect(subG).connect(filter);
   filter.connect(amp).connect(out); amp.connect(delay).connect(fb).connect(delay); delay.connect(wet).connect(out);
+  const beatBus = ac.createGain(); beatBus.gain.value = .5; beatBus.connect(out); // drums go through the analyser too, so the visuals hit on the beat
+  const noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate), nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
   out.connect(an).connect(ac.destination);
-  audio = { ctx: ac, o: [o1, o2, sub], filter, amp, fb, wet, an, bins: new Uint8Array(an.frequencyBinCount) };
+  audio = { ctx: ac, o: [o1, o2, sub], filter, amp, fb, wet, an, bins: new Uint8Array(an.frequencyBinCount), wave: new Uint8Array(an.fftSize), beatBus, noise, next: 0, step: 0, beatStart: 0 };
 }
 stage.addEventListener("click", () => MODES[mode] === synth && startAudio());
 const synth = {
   name: "Synth", hidesHands: true, noSparks: true,
-  get help() { return audio ? `LEFT hand height → note · open hand plays, fist mutes\nRIGHT hand height → filter brightness · left/right → echo · pinch → wobble\nspread both hands → sphere size · M mutes` : "click anywhere (or press M) to turn the sound on"; },
+  get help() { return audio ? `LEFT hand height → note · open hand plays, fist mutes\nRIGHT hand height → filter brightness · left/right → echo · pinch → wobble\nspread both hands → visual size · V visual · B beat · M mutes` : "click anywhere (or press M) to turn the sound on"; },
   leave() { audio?.amp.gain.setTargetAtTime(0, audio.ctx.currentTime, .05); },
   draw(now, dt) {
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
@@ -532,25 +575,83 @@ const synth = {
         audio.o[0].detune.setTargetAtTime(-7 + wob, t, .01); audio.o[1].detune.setTargetAtTime(7 + wob, t, .01);
       }
       audio.o[0].type = audio.o[1].type = WAVES[wave];
+      scheduleBeat();
       audio.an.getByteFrequencyData(audio.bins);
       for (let i = 0; i < 24; i++) level += audio.bins[i]; level /= 24 * 255;
     }
 
-    // ---- particle sphere ----
+    // ---- visualizer: every style reads the live analyser (idle motion until the sound is on) ----
     const want = hands.length === 2 ? d(hands[0].s[9], hands[1].s[9]) * .55 : Math.min(W, H) * .2;
     sy.r += (clamp(want, 60, Math.min(W, H) * .4) - sy.r) * .1;
     sy.yaw += dt * (.0002 + level * .004);
     if (right) sy.pitch += ((right.s[9].y / H - .5) * 1.2 - sy.pitch) * .05;
-    const cy = Math.cos(sy.yaw), sny = Math.sin(sy.yaw), cp = Math.cos(sy.pitch), sp = Math.sin(sy.pitch);
-    const cx0 = W * .45, cy0 = H * .4, hue = sy.note < 0 ? 200 : (sy.note % 12) * 30, bins = audio?.bins;
-    const dot = Math.max(1.6, H / 400); // dots scale with the screen so the sphere stays bright on big displays
-    ctx.save(); ctx.globalCompositeOperation = "lighter";
-    for (const p of SPHERE) {
-      const k = p.j * (1 + (bins ? bins[p.bin] / 255 * .45 : .03 * Math.sin(now / 400 + p.bin)));
-      const x = (p.x * cy - p.z * sny) * k, z1 = (p.x * sny + p.z * cy) * k, y = p.y * k;
-      const y2 = y * cp - z1 * sp, z = y * sp + z1 * cp, s = 2.4 / (3 + z);
-      ctx.fillStyle = `hsla(${hue + p.bin * 2}, 85%, ${60 + 30 * (bins ? bins[p.bin] / 255 : 0)}%, ${.4 + .6 * (1 - z) / 2})`;
-      ctx.fillRect(cx0 + x * sy.r * s, cy0 + y2 * sy.r * s, dot, dot);
+    const cx0 = W * .45, cy0 = H * .4, hue = sy.note < 0 ? 200 : (sy.note % 12) * 30;
+    if (audio) audio.an.getByteTimeDomainData(audio.wave);
+    else for (let i = 0; i < 1024; i++) { idleWave[i] = 128 + 40 * Math.sin(i / 1024 * TAU * 4 + now / 300); if (i < 512) idleBins[i] = Math.max(0, 90 - i * .4 + 40 * Math.sin(now / 500 + i * .15)); }
+    const bins = audio?.bins || idleBins, wav = audio?.wave || idleWave, B = bands(bins, BANDS), Wd = Math.min(W * .62, 1000);
+    let pk = 8; for (let k = 0; k < wav.length; k += 4) pk = Math.max(pk, Math.abs(wav[k] - 128));
+    sy.gain += (sy.r / pk - sy.gain) * .2; // waveform visuals auto-scale to the current peak, so quiet notes still fill the space
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    switch (VISUALS[vis]) {
+      case "Spectrum": { // log-spaced bars with falling peak caps and a reflection
+        const bw = Wd / B.length, H2 = Math.min(sy.r * 1.1, cy0 - 140); // tall enough to read, clear of the help text
+        B.forEach((v, i) => {
+          peaks[i] = Math.max(v, peaks[i] - dt * .0005);
+          const x = cx0 - Wd / 2 + i * bw, h = v * H2;
+          ctx.fillStyle = `hsl(${hue + i * 4}, 90%, ${45 + 25 * v}%)`; ctx.fillRect(x, cy0 - h, bw * .72, h);
+          ctx.globalAlpha = .22; ctx.fillRect(x, cy0 + 4, bw * .72, h * .45); ctx.globalAlpha = 1;
+          ctx.fillStyle = "#fff"; ctx.fillRect(x, cy0 - peaks[i] * H2 - 5, bw * .72, 3);
+        });
+        break;
+      }
+      case "Ring": { // circular spectrum, mirrored so it's symmetric; spins with the level
+        const N = 128, R0 = sy.r * .55;
+        const glow = ctx.createRadialGradient(cx0, cy0, 0, cx0, cy0, R0);
+        glow.addColorStop(0, `hsla(${hue}, 90%, 60%, ${.15 + level * .6})`); glow.addColorStop(1, "hsla(0, 0%, 0%, 0)");
+        ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(cx0, cy0, R0, 0, TAU); ctx.fill();
+        ctx.lineWidth = Math.max(2, TAU * R0 / N * .55);
+        for (let i = 0; i < N; i++) {
+          const j = i < N / 2 ? i : N - 1 - i, v = B[j], a = i / N * TAU + sy.yaw, l = 6 + v * sy.r * .9;
+          ctx.strokeStyle = `hsl(${hue + j * 4}, 95%, ${50 + 30 * v}%)`; ctx.beginPath();
+          ctx.moveTo(cx0 + Math.cos(a) * R0, cy0 + Math.sin(a) * R0); ctx.lineTo(cx0 + Math.cos(a) * (R0 + l), cy0 + Math.sin(a) * (R0 + l)); ctx.stroke();
+        }
+        break;
+      }
+      case "Scope": { // the actual waveform, like an oscilloscope
+        ctx.strokeStyle = "rgba(127,240,232,.12)"; ctx.lineWidth = 1; ctx.beginPath();
+        for (let k = -2; k <= 2; k++) { ctx.moveTo(cx0 - Wd / 2, cy0 + k * sy.r / 2); ctx.lineTo(cx0 + Wd / 2, cy0 + k * sy.r / 2); }
+        ctx.stroke();
+        for (const [lw, al] of [[10, .2], [2.5, 1]]) {
+          ctx.strokeStyle = `hsla(${hue}, 95%, 65%, ${al})`; ctx.lineWidth = lw; ctx.beginPath();
+          for (let k = 0; k < wav.length; k += 2) { const x = cx0 - Wd / 2 + k / wav.length * Wd, y = cy0 + (wav[k] - 128) * sy.gain * .9; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+          ctx.stroke();
+        }
+        break;
+      }
+      case "Orbit": { // X/Y phase scope: the signal against itself a quarter-cycle later; sine → circle, square → square
+        const f = sy.note < 0 ? 220 : 440 * 2 ** ((sy.note - 69) / 12), q = Math.max(1, Math.round((audio?.ctx.sampleRate || 48000) / f / 4));
+        const c = Math.cos(sy.yaw * .3), sn = Math.sin(sy.yaw * .3);
+        for (const [lw, al] of [[9, .18], [2, .95]]) {
+          ctx.strokeStyle = `hsla(${hue + 40}, 95%, 65%, ${al})`; ctx.lineWidth = lw; ctx.beginPath();
+          for (let k = 0; k + q < wav.length; k++) {
+            const u = (wav[k] - 128) * sy.gain, v = (wav[k + q] - 128) * sy.gain;
+            const x = cx0 + u * c - v * sn, y = cy0 + u * sn + v * c; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+          }
+          ctx.stroke();
+        }
+        break;
+      }
+      default: { // Sphere: particles pushed out by their own frequency bin
+        const cy = Math.cos(sy.yaw), sny = Math.sin(sy.yaw), cp = Math.cos(sy.pitch), sp = Math.sin(sy.pitch);
+        const dot = Math.max(1.6, H / 400); // dots scale with the screen so the sphere stays bright on big displays
+        for (const p of SPHERE) {
+          const bv = bins[p.bin] / 255, k = p.j * (1 + bv * .45);
+          const x = (p.x * cy - p.z * sny) * k, z1 = (p.x * sny + p.z * cy) * k, y = p.y * k;
+          const y2 = y * cp - z1 * sp, z = y * sp + z1 * cp, s = 2.4 / (3 + z);
+          ctx.fillStyle = `hsla(${hue + p.bin * 2}, 85%, ${60 + 30 * bv}%, ${.4 + .6 * (1 - z) / 2})`;
+          ctx.fillRect(cx0 + x * sy.r * s, cy0 + y2 * sy.r * s, dot, dot);
+        }
+      }
     }
     ctx.restore();
 
@@ -565,7 +666,7 @@ const synth = {
     ctx.restore();
 
     // ---- small live camera panel with fingertip rings ----
-    const pw = Math.min(340, W * .3), ph = pw * H / W, px = W - pw - 60, py = H - 130 - ph;
+    const pw = Math.min(340, W * .3), ph = pw * H / W, px = W - pw - 60, py = H - 250 - ph;
     ctx.save(); ctx.fillStyle = "rgba(20,20,24,.9)"; ctx.strokeStyle = "rgba(255,255,255,.25)";
     ctx.beginPath(); ctx.roundRect(px - 2, py - 34, pw + 4, ph + 36, 12); ctx.fill(); ctx.stroke();
     ctx.font = FONT; ctx.fillStyle = "#ddd";
@@ -586,7 +687,105 @@ const synth = {
       }
     }
     ctx.restore();
+    if (audio && beat) { // step lights: which of the 16 steps is playing now
+      const st = Math.floor((audio.ctx.currentTime - audio.beatStart) / STEP) % 16, x0 = W / 2 - 16 * 11;
+      for (let i = 0; i < 16; i++) { ctx.fillStyle = i === st ? "#f5c542" : i % 4 ? "rgba(255,255,255,.15)" : "rgba(255,255,255,.35)"; ctx.fillRect(x0 + i * 22, H - 238, 16, 6); }
+    }
+    chipRow(BEATS, beat, H - 214, beatDwell, dt, i => { beat = i; if (audio) audio.next = 0; });
+    chipRow(VISUALS, vis, H - 162, visDwell, dt, i => vis = i);
     chipRow(["Saw", "Square", "Triangle", "Sine"], wave, H - 110, waveDwell, dt, i => wave = i);
+  },
+};
+
+// ---- sky: turn the heavens — long-exposure star trails spin around a pole, you stay in front (person mask) ----
+const SKY_COLS = ["#ffffff", "#bcd4ff", "#9fb6ff", "#e6c8ff"];
+const sky = {
+  name: "Sky", hidesHands: true,
+  a: 0, vel: .0003, dir: 1, wheel: null, last: null, w: 0, h: 0, stars: [],
+  neb: document.createElement("canvas"), trail: document.createElement("canvas"), me: document.createElement("canvas"), mask: document.createElement("canvas"),
+  get help() { return `raise both arms → the sky starts turning\nturn your hands like a wheel to spin it (or sweep one hand)\nstand back so your upper body is in view — you stay in front of the stars`; },
+  setup() { // nebula backdrop + star field, rebuilt when the window size changes
+    this.w = W; this.h = H;
+    for (const c of [this.neb, this.trail, this.me]) { c.width = W; c.height = H; }
+    const g = this.neb.getContext("2d"), bg = g.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#070a1f"); bg.addColorStop(.55, "#1b1640"); bg.addColorStop(1, "#3a2c5c"); g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    for (let i = 0; i < 9; i++) { // soft nebula clouds
+      const x = R() * W, y = R() * H * .7, r = (.2 + R() * .35) * Math.max(W, H), c = g.createRadialGradient(x, y, 0, x, y, r);
+      c.addColorStop(0, `hsla(${230 + R() * 70}, 70%, ${35 + R() * 20}%, ${.12 + R() * .12})`); c.addColorStop(1, "hsla(260, 70%, 30%, 0)");
+      g.fillStyle = c; g.fillRect(0, 0, W, H);
+    }
+    const diag = Math.hypot(W, H);
+    this.stars = Array.from({ length: 900 }, () => ({ r: Math.sqrt(R()) * diag, p: R() * TAU, c: (R() * SKY_COLS.length) | 0, w: .6 + R() ** 3 * 2 }));
+  },
+  draw(now, dt) {
+    if (this.w !== W || this.h !== H) this.setup();
+    // ---- gestures → angular velocity ----
+    let push = 0;
+    if (hands.length === 2) {
+      const a = palmOf(hands[0]), b = palmOf(hands[1]), ang = Math.atan2(b.y - a.y, b.x - a.x);
+      if (this.wheel !== null) push += (((ang - this.wheel + 3 * Math.PI) % TAU) - Math.PI) * 1.4; // steering-wheel turn
+      this.wheel = ang;
+      const lift = clamp((H * .5 - (a.y + b.y) / 2) / (H * .35), 0, 1); // arms raised high → the heavens turn on their own
+      push += lift * .0007 * this.dir;
+    } else this.wheel = null;
+    if (hands.length === 1) { const c = palmOf(hands[0]); if (this.last) push += (c.x - this.last.x) / W * .9; this.last = c; } else this.last = null;
+    this.vel = this.vel * .94 + push * .35 + .0003 * this.dir * .06; // momentum, settling to a slow idle drift
+    if (Math.abs(push) > .0005) this.dir = Math.sign(push);
+    const a0 = this.a, a1 = this.a + this.vel; this.a = a1;
+
+    // ---- long exposure: fade old trails a little, then draw each star's arc from last frame to this one ----
+    const P = { x: W * .5, y: H * .16 }, tg = this.trail.getContext("2d");
+    tg.globalCompositeOperation = "destination-out"; tg.fillStyle = `rgba(0,0,0,${.035 + .1 * clamp(.002 - Math.abs(this.vel), 0, .002) / .002})`; tg.fillRect(0, 0, W, H);
+    tg.globalCompositeOperation = "lighter"; tg.lineCap = "round";
+    const span = Math.abs(a1 - a0) < .0015 ? .0015 * this.dir : a1 - a0; // still sky → short dashes, so stars stay visible
+    SKY_COLS.forEach((col, ci) => {
+      for (const wide of [false, true]) {
+        tg.strokeStyle = col; tg.globalAlpha = wide ? .18 : .85; tg.beginPath();
+        for (const st of this.stars) {
+          if (st.c !== ci) continue;
+          const s0 = st.p + a1 - span;
+          tg.moveTo(P.x + Math.cos(s0) * st.r, P.y + Math.sin(s0) * st.r); tg.arc(P.x, P.y, st.r, s0, st.p + a1, span < 0);
+        }
+        tg.lineWidth = wide ? 3.5 : 1.2; tg.stroke();
+      }
+    });
+    tg.globalAlpha = 1;
+    ctx.drawImage(this.neb, 0, 0, W, H);
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.drawImage(this.trail, 0, 0, W, H); ctx.restore();
+
+    // ---- moonlit dunes + haze on the horizon ----
+    const hz = ctx.createLinearGradient(0, H * .55, 0, H * .85); hz.addColorStop(0, "rgba(140,130,200,0)"); hz.addColorStop(1, "rgba(170,160,220,.35)");
+    ctx.fillStyle = hz; ctx.fillRect(0, H * .55, W, H * .3);
+    [[.8, "#6d6788", .02], [.86, "#a59fb8", .035], [.92, "#d6d0e0", .05]].forEach(([y0, col, amp], i) => {
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, H);
+      for (let x = 0; x <= W; x += 20) ctx.lineTo(x, H * y0 + Math.sin(x / W * (3 + i) * Math.PI + i) * H * amp);
+      ctx.lineTo(W, H); ctx.fill();
+    });
+
+    // ---- you, cut out of the camera and standing in front of it all ----
+    if (segMask && video.readyState >= 2) {
+      const { w: mw, h: mh, data } = segMask, m = this.mask;
+      if (m.width !== mw || m.height !== mh) { m.width = mw; m.height = mh; }
+      const mg = m.getContext("2d"), id = mg.createImageData(mw, mh);
+      for (let i = 0; i < data.length; i++) { id.data[i * 4] = id.data[i * 4 + 1] = id.data[i * 4 + 2] = 255; id.data[i * 4 + 3] = clamp((data[i] - .3) / .4, 0, 1) * 255; }
+      mg.putImageData(id, 0, 0);
+      const me = this.me.getContext("2d");
+      me.globalCompositeOperation = "source-over"; me.clearRect(0, 0, W, H);
+      me.save(); me.translate(W, 0); me.scale(-1, 1); me.drawImage(video, map.ox, map.oy, map.dw, map.dh);
+      me.globalCompositeOperation = "destination-in"; me.imageSmoothingEnabled = true; me.filter = "blur(4px)"; // feather the low-res mask edge
+      me.drawImage(m, map.ox, map.oy, map.dw, map.dh); me.filter = "none"; me.restore();
+      ctx.save(); ctx.filter = "brightness(.8) saturate(.75) contrast(1.05)"; ctx.drawImage(this.me, 0, 0, W, H); ctx.restore(); // cooled to sit in moonlight
+    } else tag(video.readyState >= 2 ? "finding you…" : "needs the camera to put you in front of the sky", W / 2 - 150, H * .62);
+
+    // ---- palms glow with the force you're putting into the sky ----
+    const force = clamp(Math.abs(this.vel) * 300, .15, 1);
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (const h of hands) {
+      const c = palmOf(h), r = d(h.s[0], h.s[9]) * 1.6, g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
+      g.addColorStop(0, `rgba(200,220,255,${.5 * force})`); g.addColorStop(1, "rgba(120,140,255,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
   },
 };
 
@@ -1138,7 +1337,7 @@ const xray = {
 };
 
 // ---- modes, bottom bar, keys ----
-const MODES = [portal, particles, paint, shapes, strings, synth, xray];
+const MODES = [portal, particles, paint, shapes, strings, synth, sky, xray];
 let mode = 0;
 const dwell = MODES.map(() => 0);
 const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
@@ -1147,6 +1346,8 @@ addEventListener("keydown", e => {
   if (e.key === "e") effect = (effect + 1) % EFFECTS.length;
   if (e.key === "k") kaleido = !kaleido;
   if (e.key === "m" && MODES[mode] === synth) { if (!audio) startAudio(); else audio.muted = !audio.muted; }
+  if (e.key === "v" && MODES[mode] === synth) vis = (vis + 1) % VISUALS.length;
+  if (e.key === "b" && MODES[mode] === synth) { beat = (beat + 1) % BEATS.length; if (audio) audio.next = 0; }
   if (e.key === "t") theme = (theme + 1) % THEMES.length;
   if (e.key === "c") strokes = [];
   if (e.key === "x") xr.explodeKey = !xr.explodeKey;
@@ -1219,7 +1420,7 @@ async function pump() {
   busy = true; lastVideoTime = video.currentTime;
   try {
     const bitmap = await createImageBitmap(video);
-    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: MODES[mode] === portal && needsSeg() }, [bitmap]);
+    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: (MODES[mode] === portal && needsSeg()) || MODES[mode] === sky }, [bitmap]);
   } catch { busy = false; }
 }
 // glide on-screen points toward the latest detection, so motion is smooth at display rate between ~30 Hz results
