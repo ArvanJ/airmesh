@@ -22,7 +22,7 @@
 
 <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
 <script type="module">
-import { HandLandmarker, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+import { HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
 const $ = id => document.getElementById(id);
 const video = $("video"), stage = $("stage"), ctx = stage.getContext("2d"), hud = $("hud"), status = $("status");
@@ -82,73 +82,6 @@ function tag(text, x, y, color = "#7ff0e8") {
   ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.fillText(text, x + 8, y);
   ctx.restore();
 }
-
-// =====================================================================
-// MODE 1: Parabola — fingers set vertex + a point, filled rainbow bands
-// =====================================================================
-const UNIT = 60; // px per graph unit
-const par = { h: 0, k: 0, px: 0, py: 0, init: false };
-function grid() {
-  const cx = W / 2, cy = H / 2;
-  ctx.save(); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(127,240,232,.09)"; ctx.beginPath();
-  for (let x = cx % UNIT; x < W; x += UNIT) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
-  for (let y = cy % UNIT; y < H; y += UNIT) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
-  ctx.stroke();
-  ctx.strokeStyle = "rgba(127,240,232,.45)"; ctx.beginPath();
-  ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
-  ctx.fillStyle = "rgba(127,240,232,.6)"; ctx.font = "10px ui-monospace, Menlo, monospace";
-  for (let i = -Math.floor(cx / UNIT); i <= cx / UNIT; i++) if (i) ctx.fillText(i, cx + i * UNIT + 3, cy + 12);
-  for (let i = -Math.floor(cy / UNIT); i <= cy / UNIT; i++) if (i) ctx.fillText(-i, cx + 4, cy + i * UNIT - 3);
-  ctx.restore();
-}
-function curve(h, k, a) {
-  ctx.beginPath();
-  for (let x = -20; x <= W + 26; x += 6) {
-    const y = clamp(a * (x - h) ** 2 + k, -60, H + 60);
-    x === -20 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  }
-}
-const parabola = {
-  name: "Parabola",
-  help: "left index = vertex · right index = point on curve\none hand: index = vertex, thumb = point on curve\nyellow = roots where it crosses the x-axis",
-  draw(now) {
-    grid();
-    let V, P;
-    if (hands.length >= 2) { V = hands[0].s[8]; P = hands[1].s[8]; }
-    else if (hands.length === 1) { V = hands[0].s[8]; P = hands[0].s[4]; }
-    else { const t = now / 1500; V = { x: W / 2 + Math.sin(t) * 150, y: H * .35 }; P = { x: V.x + 180, y: H * .35 + Math.cos(t * .7) * 220 }; }
-    if (!par.init) Object.assign(par, { h: V.x, k: V.y, px: P.x, py: P.y, init: true });
-    par.h += (V.x - par.h) * .3; par.k += (V.y - par.k) * .3; par.px += (P.x - par.px) * .3; par.py += (P.y - par.py) * .3;
-
-    let dx = par.px - par.h; if (Math.abs(dx) < 25) dx = 25 * (Math.sign(dx) || 1);
-    let a = (par.py - par.k) / (dx * dx); if (Math.abs(a) < 2e-4) a = 2e-4 * (Math.sign(a) || 1);
-    const dir = Math.sign(a), edge = dir > 0 ? H + 60 : -60;
-
-    // nested copies shifted into the bowl: painter's order gives rainbow contour bands
-    ctx.save();
-    for (let i = 0; i < 10; i++) {
-      curve(par.h, par.k + dir * i * 24, a);
-      ctx.lineTo(W + 26, edge); ctx.lineTo(-20, edge); ctx.closePath();
-      ctx.fillStyle = `hsla(${(now / 25 + i * 30) % 360}, 95%, ${52 + i * 2}%, ${i ? .4 : .22})`;
-      ctx.fill();
-    }
-    curve(par.h, par.k, a);
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.shadowColor = "#7ff0e8"; ctx.shadowBlur = 20; ctx.stroke();
-    ctx.shadowBlur = 0; ctx.setLineDash([6, 6]); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,.5)";
-    ctx.beginPath(); ctx.moveTo(par.h, 0); ctx.lineTo(par.h, H); ctx.stroke();
-    ctx.restore();
-
-    const r2 = (H / 2 - par.k) / a;
-    if (r2 >= 0) for (const x of [par.h - Math.sqrt(r2), par.h + Math.sqrt(r2)]) {
-      marker(x, H / 2, "#f5c542"); tag(`x = ${((x - W / 2) / UNIT).toFixed(2)}`, x - 40, H / 2 + 30, "#f5c542");
-    }
-    marker(par.h, par.k); marker(par.px, par.py);
-    const A = -a * UNIT, Hm = (par.h - W / 2) / UNIT, Km = (H / 2 - par.k) / UNIT;
-    tag(`y = ${A.toFixed(2)}(x ${Hm >= 0 ? "−" : "+"} ${Math.abs(Hm).toFixed(2)})² ${Km >= 0 ? "+" : "−"} ${Math.abs(Km).toFixed(2)}`,
-      par.h + 20, par.k - dir * 34, "#4ade80");
-    tag(`vertex (${Hm.toFixed(2)}, ${Km.toFixed(2)})`, par.h + 20, par.k - dir * 64);
-  },
-};
 
 // =====================================================================
 // MODE 2: Portal — thumb+index of both hands frame a live camera filter
@@ -380,97 +313,6 @@ const shapes = {
     for (const layer of [1, .72, .48]) {
       ctx.beginPath(); spts.forEach(([x, y], i) => i ? ctx.lineTo(x * r * layer, y * r * layer) : ctx.moveTo(x * r * layer, y * r * layer)); ctx.stroke();
     }
-    ctx.restore();
-  },
-};
-
-// =====================================================================
-// MODE 6: Face FX — face mesh + facial expressions drive effects
-// =====================================================================
-let faceLM = false, facePts = null, blend = {}, TESS = [], CONTOURS = [];
-const STYLES = ["Wireframe", "Contours", "Dots"];
-let style = 0, eyesClosedMs = 0;
-const breath = [];
-const edges = (P, conns) => { ctx.beginPath(); for (const [a, b] of conns) { ctx.moveTo(P[a].x, P[a].y); ctx.lineTo(P[b].x, P[b].y); } };
-const unit = (x, y) => { const l = Math.hypot(x, y) || 1; return { x: x / l, y: y / l }; };
-const faceFx = {
-  name: "Face FX",
-  get help() { return `open mouth → rainbow breath\nraise eyebrows → laser eyes (point a finger to aim)\nsmile → halo · close eyes ~0.5s → mesh style (${STYLES[style]})`; },
-  draw(now, dt) {
-    if (!faceLM) { tag("face model unavailable — needs the camera", W / 2 - 170, H / 2); return; }
-    if (!facePts) { tag("look at the camera", W / 2 - 80, H / 2); return; }
-    const P = facePts, s = k => blend[k] || 0, hue = now / 20 % 360;
-    const jaw = s("jawOpen"), smile = (s("mouthSmileLeft") + s("mouthSmileRight")) / 2, brow = s("browInnerUp");
-
-    // a deliberate long blink (not a normal one) cycles the mesh style
-    eyesClosedMs = Math.min(s("eyeBlinkLeft"), s("eyeBlinkRight")) > .5 ? eyesClosedMs + dt : 0;
-    if (eyesClosedMs > 500 && eyesClosedMs - dt <= 500) style = (style + 1) % STYLES.length;
-
-    ctx.save(); ctx.globalCompositeOperation = "lighter";
-    if (style === 0) { edges(P, TESS); ctx.strokeStyle = `hsla(${hue}, 100%, 65%, .35)`; ctx.lineWidth = .8; ctx.stroke(); }
-    else if (style === 1) { edges(P, CONTOURS); ctx.strokeStyle = `hsl(${hue}, 100%, 65%)`; ctx.lineWidth = 2.5; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 15; ctx.stroke(); }
-    else for (let i = 0; i < P.length; i++) { ctx.fillStyle = `hsl(${(hue + i) % 360}, 100%, 65%)`; ctx.fillRect(P[i].x - 1.5, P[i].y - 1.5, 3, 3); }
-    ctx.restore();
-
-    // rainbow breath out of the mouth, pointing away from the eyes
-    if (jaw > .25) {
-      const m = { x: (P[13].x + P[14].x) / 2, y: (P[13].y + P[14].y) / 2 }, dir = unit(m.x - P[168].x, m.y - P[168].y);
-      for (let i = 0; i < 6; i++) {
-        const sp = 3 + R() * 6 * jaw, a = (R() - .5) * .8, c = Math.cos(a), sn = Math.sin(a);
-        breath.push({ x: m.x, y: m.y, vx: (dir.x * c - dir.y * sn) * sp, vy: (dir.x * sn + dir.y * c) * sp, life: 1, hue: (hue + R() * 60) % 360 });
-      }
-    }
-    if (breath.length > 800) breath.splice(0, breath.length - 800);
-    ctx.save(); ctx.globalCompositeOperation = "lighter";
-    for (let i = breath.length - 1; i >= 0; i--) {
-      const b = breath[i]; b.x += b.vx; b.y += b.vy; b.vx *= .98; b.vy *= .98; b.life -= .018;
-      if (b.life <= 0) { breath.splice(i, 1); continue; }
-      ctx.fillStyle = `hsla(${b.hue}, 100%, 60%, ${b.life * .5})`;
-      ctx.beginPath(); ctx.arc(b.x, b.y, 3 + (1 - b.life) * 14, 0, TAU); ctx.fill();
-    }
-    ctx.restore();
-
-    // laser eyes from the irises; aim at a fingertip if a hand is up, else along the nose
-    if (brow > .45) {
-      const tip = hands[0]?.s[8], fwd = unit(P[1].x - P[168].x, P[1].y - P[168].y);
-      ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
-      for (const e of [P[468] || P[33], P[473] || P[263]]) {
-        const end = tip || { x: e.x + fwd.x * 2000, y: e.y + fwd.y * 2000 };
-        for (const [w, c] of [[14, "rgba(255,0,40,.35)"], [5, "#ff3b4a"], [1.5, "#fff"]]) {
-          ctx.strokeStyle = c; ctx.lineWidth = w * (.6 + brow); ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(end.x, end.y); ctx.stroke();
-        }
-        if (tip) for (let i = 0; i < 4; i++) sparks.push({ x: tip.x, y: tip.y, vx: (R() - .5) * 8, vy: (R() - .5) * 8, life: 1, hue: R() * 40 });
-      }
-      ctx.restore();
-    }
-
-    // smile halo above the forehead
-    if (smile > .4) {
-      const top = P[10], r = d(P[234], P[454]) * .55, cy = top.y - r * .35;
-      ctx.save(); ctx.globalCompositeOperation = "lighter";
-      ctx.strokeStyle = "#ffd76a"; ctx.lineWidth = 4; ctx.shadowColor = "#ffd76a"; ctx.shadowBlur = 25 * smile;
-      ctx.beginPath(); ctx.ellipse(top.x, cy, r, r * .22, 0, 0, TAU); ctx.stroke();
-      for (let i = 0; i < 12; i++) {
-        const a = now / 600 + i * TAU / 12;
-        ctx.fillStyle = `hsl(${(hue + i * 30) % 360}, 100%, 70%)`;
-        ctx.beginPath(); ctx.arc(top.x + Math.cos(a) * r, cy + Math.sin(a) * r * .22, 4, 0, TAU); ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    // live expression readout
-    const roll = Math.atan2(P[263].y - P[33].y, P[263].x - P[33].x) * 180 / Math.PI;
-    const meters = [["jaw open", jaw], ["smile", smile], ["brows up", brow], ["blink L", s("eyeBlinkLeft")], ["blink R", s("eyeBlinkRight")]];
-    ctx.save(); ctx.font = FONT;
-    const x0 = W - 230; let y0 = 80;
-    ctx.fillStyle = "rgba(5,10,15,.7)"; ctx.fillRect(x0 - 12, y0 - 22, 222, meters.length * 26 + 44);
-    for (const [label, v] of meters) {
-      ctx.fillStyle = "#dff"; ctx.fillText(label, x0, y0);
-      ctx.fillStyle = "rgba(255,255,255,.15)"; ctx.fillRect(x0 + 80, y0 - 9, 110, 10);
-      ctx.fillStyle = `hsl(${160 - v * 160}, 90%, 60%)`; ctx.fillRect(x0 + 80, y0 - 9, 110 * v, 10);
-      y0 += 26;
-    }
-    ctx.fillStyle = "#7ff0e8"; ctx.fillText(`head roll ${roll.toFixed(0)}°`, x0, y0 + 4);
     ctx.restore();
   },
 };
@@ -1201,7 +1043,7 @@ const xray = {
 };
 
 // ---- modes, bottom bar, keys ----
-const MODES = [parabola, portal, particles, paint, shapes, faceFx, strings, synth, xray];
+const MODES = [portal, particles, paint, shapes, strings, synth, xray];
 let mode = 0;
 const dwell = MODES.map(() => 0);
 const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
@@ -1253,17 +1095,14 @@ function sparkles(now) {
 // ---- hand tracking: inference runs in tracker.js (a worker), results eased onto the screen every frame ----
 const pair = c => [c.start ?? c[0], c.end ?? c[1]];
 CONN = HandLandmarker.HAND_CONNECTIONS.map(pair);
-TESS = FaceLandmarker.FACE_LANDMARKS_TESSELATION.map(pair);
-CONTOURS = FaceLandmarker.FACE_LANDMARKS_CONTOURS.map(pair);
 const tracker = new Worker("tracker.js");
 let trackerReady = false, busy = false, lastVideoTime = -1, startError = "", target = [];
 tracker.onmessage = ({ data }) => {
-  if (data.type === "ready") { trackerReady = true; faceLM = data.face; }
+  if (data.type === "ready") trackerReady = true;
   else if (data.type === "error") { busy = false; console.warn("tracker:", data.message); }
   else if (data.type === "result") {
     busy = false;
     target = data.hands.map(lm => ({ lm, s: lm.map(toScreen), fingers: countFingers(lm), pinch: pinchOf(lm) })).sort((a, b) => a.s[0].x - b.s[0].x);
-    if (data.face) { facePts = data.face.lm?.map(toScreen) || null; blend = Object.fromEntries(data.face.bs); }
     const msg = target.length ? `TRACKING ${target.length} HAND${target.length > 1 ? "S" : ""}` : "NO HANDS";
     if (status.textContent !== msg) status.textContent = msg;
   }
@@ -1284,7 +1123,7 @@ async function pump() {
   busy = true; lastVideoTime = video.currentTime;
   try {
     const bitmap = await createImageBitmap(video);
-    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantFace: MODES[mode] === faceFx }, [bitmap]);
+    tracker.postMessage({ type: "frame", bitmap, t: performance.now() }, [bitmap]);
   } catch { busy = false; }
 }
 // glide on-screen points toward the latest detection, so motion is smooth at display rate between ~30 Hz results
