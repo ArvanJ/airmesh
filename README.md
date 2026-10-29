@@ -55,7 +55,7 @@ Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoo
 - **Cutout, Ghost, Invisible, Predator and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
   - **Cutout:** puts you in space.
   - **Ghost:** shows you as a heat signature over a blueprint world.
-  - **Invisible:** makes you disappear. AirMesh keeps learning what the background looks like wherever you *aren't* standing, then paints that over you. Move around (or step aside for a second) so it can see behind you.
+  - **Invisible:** makes you disappear. AirMesh learns the background wherever you *aren't* standing and paints it over you. Any part it has never seen gets filled in from the surroundings (push-pull inpainting, in the spirit of `cv.inpaint`), so you vanish right away and the fill sharpens as you sway side to side.
   - **Predator:** a cloaking-device look. You turn see-through, the background bends through your outline and the edges shimmer.
   - **Echo:** leaves rainbow afterimages behind you as you move.
 

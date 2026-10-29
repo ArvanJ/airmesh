@@ -97,8 +97,45 @@ const small = document.createElement("canvas"), sctx = small.getContext("2d", { 
 const maskSrc = document.createElement("canvas"), mctx = maskSrc.getContext("2d");
 const maskSmall = document.createElement("canvas"), msctx = maskSmall.getContext("2d", { willReadFrequently: true });
 let effect = 0, tapped = [false, false], segMask = null; // tapped: per hand pinch held, so one tap = one switch
-// per-frame buffers for fx(): src = untouched camera pixels, plate = learned empty background, echo = fading person trails
-let src, plate = null, echo = null, rowShift = [];
+// per-frame buffers for fx(): src = untouched camera pixels, plate = learned empty background (known = seen without you),
+// bg = plate with never-seen gaps inpainted, echo = fading person trails
+let src, plate = null, known = null, bg = null, echo = null, rowShift = [], unseen = 0;
+// fill pixels never seen as background from the surroundings (push-pull inpainting, in the spirit of cv.inpaint):
+// average known pixels down a pyramid, then pull those averages back up into the holes
+const pyr = [];
+function inpaint(w, h) {
+  let lw = w, lh = h, L = 0;
+  for (;;) { // (re)allocate the pyramid levels for this size
+    if (!pyr[L] || pyr[L].w !== lw || pyr[L].h !== lh) pyr[L] = { w: lw, h: lh, c: new Float32Array(lw * lh * 3), a: new Float32Array(lw * lh), r: new Float32Array(lw * lh * 3) };
+    if (lw === 1 && lh === 1) break;
+    lw = Math.ceil(lw / 2); lh = Math.ceil(lh / 2); L++;
+  }
+  const top = L, b0 = pyr[0];
+  for (let i = 0; i < w * h; i++) { const k = known[i]; b0.a[i] = k; for (let j = 0; j < 3; j++) b0.c[i * 3 + j] = plate[i * 3 + j] * k; }
+  for (let l = 1; l <= top; l++) { // push: each coarse pixel sums its 2x2 children (premultiplied by "known")
+    const f = pyr[l - 1], c = pyr[l]; c.a.fill(0); c.c.fill(0);
+    for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
+      const fi = y * f.w + x, ci = (y >> 1) * c.w + (x >> 1);
+      c.a[ci] += f.a[fi]; for (let j = 0; j < 3; j++) c.c[ci * 3 + j] += f.c[fi * 3 + j];
+    }
+  }
+  const t = pyr[top]; for (let j = 0; j < 3; j++) t.r[j] = t.a[0] ? t.c[j] / t.a[0] : 40;
+  for (let l = top - 1; l >= 0; l--) { // pull: known detail where there is some, the coarser average where there isn't
+    const f = pyr[l], c = pyr[l + 1];
+    for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
+      const fi = y * f.w + x, a = f.a[fi], wgt = Math.min(1, a);
+      // bilinear sample of the coarser level, so the filled hole is a smooth blend instead of blocks
+      const u = clamp((x + .5) / 2 - .5, 0, c.w - 1), v = clamp((y + .5) / 2 - .5, 0, c.h - 1), x0 = u | 0, y0 = v | 0;
+      const x1 = Math.min(x0 + 1, c.w - 1), y1 = Math.min(y0 + 1, c.h - 1), fx_ = u - x0, fy = v - y0;
+      for (let j = 0; j < 3; j++) {
+        const p = (c.r[(y0 * c.w + x0) * 3 + j] * (1 - fx_) + c.r[(y0 * c.w + x1) * 3 + j] * fx_) * (1 - fy)
+                + (c.r[(y1 * c.w + x0) * 3 + j] * (1 - fx_) + c.r[(y1 * c.w + x1) * 3 + j] * fx_) * fy;
+        f.r[fi * 3 + j] = (a ? f.c[fi * 3 + j] / a : 0) * wgt + p * (1 - wgt);
+      }
+    }
+  }
+  return b0.r;
+}
 const blueprint = l => l < .25 ? [8, 10, 70] : l < .5 ? [25, 40, 190] : l < .72 ? [60, 120, 255] : [190, 215, 255];
 const thermal = l => { const t = l * 3.999, i = Math.floor(t), f = t - i, p = THERMAL[i], q = THERMAL[i + 1];
   return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]; };
@@ -123,9 +160,9 @@ function fx(l, r, g, b, gx, gy, m, x, y, w, h, i) {
     case "Cutout": return m > .5 ? [r, g, b].map(c => Math.min(255, c * 1.15)) : R() < .004 ? [255, 255, 255] : [20 + 50 * y / h, 0, 60 + 110 * x / w];
     case "Ghost": return m > .5 ? thermal(l) : blueprint(l);
     case "Invisible": { const o = i * 3; // swap "you" for the background learned from where you weren't
-      return [r + (plate[o] - r) * cover, g + (plate[o + 1] - g) * cover, b + (plate[o + 2] - b) * cover]; }
-    case "Predator": { const o = at(plate, 3, x + Math.round(gx * 5), y + Math.round(gy * 5), w, h), rim = cover * (1 - cover) * 4; // bent background + shimmering outline
-      return [r + (plate[o] - r) * cover + 40 * rim, g + (plate[o + 1] - g) * cover + 90 * rim, b + (plate[o + 2] - b) * cover + 100 * rim]; }
+      return [r + (bg[o] - r) * cover, g + (bg[o + 1] - g) * cover, b + (bg[o + 2] - b) * cover]; }
+    case "Predator": { const o = at(bg, 3, x + Math.round(gx * 5), y + Math.round(gy * 5), w, h), rim = cover * (1 - cover) * 4; // bent background + shimmering outline
+      return [r + (bg[o] - r) * cover + 40 * rim, g + (bg[o + 1] - g) * cover + 90 * rim, b + (bg[o + 2] - b) * cover + 100 * rim]; }
     default: { const o = i * 3; return m > .5 ? [r, g, b] : [r * .6 + echo[o], g * .6 + echo[o + 1], b * .6 + echo[o + 2]]; } // Echo
   }
 }
@@ -170,13 +207,19 @@ const portal = {
     const seg = needsSeg() && segMask ? maskPixels(w, h) : null;
     src = px.slice();
     if (seg) { // keep learning the empty background wherever you aren't; trails fade and get repainted where you are
-      if (!plate || plate.length !== n * 3) { plate = new Float32Array(n * 3); echo = new Float32Array(n * 3); for (let i = 0; i < n * 3; i++) plate[i] = src[(i / 3 | 0) * 4 + i % 3]; }
-      const col = rainbow(now / 300);
-      for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) {
-        const o = i * 3 + k;
-        if (seg[i * 4] < 64) plate[o] += (src[i * 4 + k] - plate[o]) * .25;
-        echo[o] = seg[i * 4] > 128 ? col[k] * .8 : echo[o] * .93;
+      if (!plate || plate.length !== n * 3) { plate = new Float32Array(n * 3); known = new Uint8Array(n); echo = new Float32Array(n * 3); } // nothing known yet: never copy you into the background
+      const col = rainbow(now / 300); let mine = 0; unseen = 0;
+      for (let i = 0; i < n; i++) {
+        const bgPx = seg[i * 4] < 64, rate = known[i] ? .25 : 1;
+        if (bgPx) known[i] = 1; else { mine++; if (!known[i]) unseen++; }
+        for (let k = 0; k < 3; k++) {
+          const o = i * 3 + k;
+          if (bgPx) plate[o] += (src[i * 4 + k] - plate[o]) * rate;
+          echo[o] = seg[i * 4] > 128 ? col[k] * .8 : echo[o] * .93;
+        }
       }
+      unseen = mine ? unseen / mine : 0; // share of "you" whose background was never seen
+      if (EFFECTS[effect] === "Invisible" || EFFECTS[effect] === "Predator") bg = inpaint(w, h);
     }
     if (EFFECTS[effect] === "Glitch") { // bands of rows share a random sideways tear
       let sh = 0; rowShift = [];
@@ -202,6 +245,8 @@ const portal = {
     ctx.restore();
     quad.forEach(p => marker(p.x, p.y));
     if (needsSeg() && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40, "#3b82f6");
+    else if ((EFFECTS[effect] === "Invisible" || EFFECTS[effect] === "Predator") && unseen > .25)
+      tag("sway side to side: the background behind you sharpens as I see it", W / 2 - 250, H - 120, "#3b82f6");
     tag(`${EFFECTS[effect].toUpperCase()}  ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28, "#3b82f6");
   },
 };
