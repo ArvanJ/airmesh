@@ -1,0 +1,1136 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hand Shapes</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: ui-monospace, Menlo, monospace; color: #dff; }
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; }
+  /* kept on-page (not display:none) so every browser keeps decoding frames */
+  video { position: fixed; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  #hud { position: fixed; left: 24px; top: 20px; font-size: 13px; line-height: 1.7; white-space: pre; text-shadow: 0 1px 3px #000; pointer-events: none; }
+  #hud b { font-size: 20px; letter-spacing: .12em; color: #7ff0e8; }
+  #status { position: fixed; right: 24px; top: 20px; letter-spacing: .15em; font-size: 16px; text-shadow: 0 1px 4px #000; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<video id="video" autoplay playsinline muted></video>
+<div id="hud">loading hand model…</div>
+<div id="status">STARTING</div>
+
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
+<script type="module">
+import { HandLandmarker, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $ = id => document.getElementById(id);
+const video = $("video"), stage = $("stage"), ctx = stage.getContext("2d"), hud = $("hud"), status = $("status");
+const TAU = Math.PI * 2, R = Math.random;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const FONT = "13px ui-monospace, Menlo, monospace";
+
+// ---- screen <-> camera mapping (video is drawn mirrored, "cover" fit) ----
+let W, H, map;
+const DPR = Math.min(devicePixelRatio || 1, 1.5);
+function layout() {
+  W = innerWidth; H = innerHeight; stage.width = W * DPR; stage.height = H * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720, s = Math.max(W / vw, H / vh);
+  map = { dw: vw * s, dh: vh * s, ox: (W - vw * s) / 2, oy: (H - vh * s) / 2 };
+}
+layout(); addEventListener("resize", layout); video.addEventListener("loadedmetadata", layout);
+const toScreen = p => ({ x: map.ox + (1 - p.x) * map.dw, y: map.oy + p.y * map.dh });
+
+// ---- hand helpers ----
+const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const countFingers = lm =>
+  [[8, 6], [12, 10], [16, 14], [20, 18]].filter(([tip, pip]) => d(lm[tip], lm[0]) > d(lm[pip], lm[0])).length
+  + (d(lm[4], lm[17]) > d(lm[3], lm[17]) ? 1 : 0);
+const pinchOf = lm => d(lm[4], lm[8]) / d(lm[0], lm[9]); // ~0.1 closed, ~1+ open
+const PINCH = .3;
+
+// self-check: synthetic open hand = 5 fingers, fist = 0
+const fake = open => {
+  const h = Array.from({ length: 21 }, () => ({ x: 0, y: 1 }));
+  [6, 10, 14, 18].forEach(i => { h[i] = { x: 0, y: .5 }; h[i + 2] = { x: 0, y: open ? 0 : .8 }; });
+  h[17] = { x: 1, y: .5 }; h[3] = { x: -.3, y: .6 }; h[4] = { x: open ? -.6 : .6, y: .6 };
+  return h;
+};
+console.assert(countFingers(fake(true)) === 5 && countFingers(fake(false)) === 0, "countFingers self-check failed");
+
+// hands: sorted left→right on screen; each {lm, s: screen points, fingers, pinch}
+let hands = [];
+const stab = { n: -1, c: 0 };
+// finger count on the left hand, reported once it has held steady for 8 frames
+function pickedCount() {
+  if (!hands.length) return 0;
+  const n = hands[0].fingers;
+  stab.c = n === stab.n ? stab.c + 1 : 0; stab.n = n;
+  return stab.c === 8 ? n : 0;
+}
+
+// ---- small drawing helpers ----
+function marker(x, y, color = "#4ade80") {
+  ctx.save(); ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 16;
+  ctx.fillRect(x - 8, y - 8, 16, 16); ctx.restore();
+}
+function tag(text, x, y, color = "#7ff0e8") {
+  ctx.save(); ctx.font = FONT;
+  const w = ctx.measureText(text).width + 16; x = clamp(x, 8, W - w - 8); y = clamp(y, 20, H - 20);
+  ctx.fillStyle = "rgba(5,10,15,.78)"; ctx.fillRect(x, y - 12, w, 24);
+  ctx.strokeStyle = color; ctx.strokeRect(x, y - 12, w, 24);
+  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.fillText(text, x + 8, y);
+  ctx.restore();
+}
+
+// =====================================================================
+// MODE 1: Parabola — fingers set vertex + a point, filled rainbow bands
+// =====================================================================
+const UNIT = 60; // px per graph unit
+const par = { h: 0, k: 0, px: 0, py: 0, init: false };
+function grid() {
+  const cx = W / 2, cy = H / 2;
+  ctx.save(); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(127,240,232,.09)"; ctx.beginPath();
+  for (let x = cx % UNIT; x < W; x += UNIT) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = cy % UNIT; y < H; y += UNIT) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(127,240,232,.45)"; ctx.beginPath();
+  ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+  ctx.fillStyle = "rgba(127,240,232,.6)"; ctx.font = "10px ui-monospace, Menlo, monospace";
+  for (let i = -Math.floor(cx / UNIT); i <= cx / UNIT; i++) if (i) ctx.fillText(i, cx + i * UNIT + 3, cy + 12);
+  for (let i = -Math.floor(cy / UNIT); i <= cy / UNIT; i++) if (i) ctx.fillText(-i, cx + 4, cy + i * UNIT - 3);
+  ctx.restore();
+}
+function curve(h, k, a) {
+  ctx.beginPath();
+  for (let x = -20; x <= W + 26; x += 6) {
+    const y = clamp(a * (x - h) ** 2 + k, -60, H + 60);
+    x === -20 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+}
+const parabola = {
+  name: "Parabola",
+  help: "left index = vertex · right index = point on curve\none hand: index = vertex, thumb = point on curve\nyellow = roots where it crosses the x-axis",
+  draw(now) {
+    grid();
+    let V, P;
+    if (hands.length >= 2) { V = hands[0].s[8]; P = hands[1].s[8]; }
+    else if (hands.length === 1) { V = hands[0].s[8]; P = hands[0].s[4]; }
+    else { const t = now / 1500; V = { x: W / 2 + Math.sin(t) * 150, y: H * .35 }; P = { x: V.x + 180, y: H * .35 + Math.cos(t * .7) * 220 }; }
+    if (!par.init) Object.assign(par, { h: V.x, k: V.y, px: P.x, py: P.y, init: true });
+    par.h += (V.x - par.h) * .3; par.k += (V.y - par.k) * .3; par.px += (P.x - par.px) * .3; par.py += (P.y - par.py) * .3;
+
+    let dx = par.px - par.h; if (Math.abs(dx) < 25) dx = 25 * (Math.sign(dx) || 1);
+    let a = (par.py - par.k) / (dx * dx); if (Math.abs(a) < 2e-4) a = 2e-4 * (Math.sign(a) || 1);
+    const dir = Math.sign(a), edge = dir > 0 ? H + 60 : -60;
+
+    // nested copies shifted into the bowl: painter's order gives rainbow contour bands
+    ctx.save();
+    for (let i = 0; i < 10; i++) {
+      curve(par.h, par.k + dir * i * 24, a);
+      ctx.lineTo(W + 26, edge); ctx.lineTo(-20, edge); ctx.closePath();
+      ctx.fillStyle = `hsla(${(now / 25 + i * 30) % 360}, 95%, ${52 + i * 2}%, ${i ? .4 : .22})`;
+      ctx.fill();
+    }
+    curve(par.h, par.k, a);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.shadowColor = "#7ff0e8"; ctx.shadowBlur = 20; ctx.stroke();
+    ctx.shadowBlur = 0; ctx.setLineDash([6, 6]); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,.5)";
+    ctx.beginPath(); ctx.moveTo(par.h, 0); ctx.lineTo(par.h, H); ctx.stroke();
+    ctx.restore();
+
+    const r2 = (H / 2 - par.k) / a;
+    if (r2 >= 0) for (const x of [par.h - Math.sqrt(r2), par.h + Math.sqrt(r2)]) {
+      marker(x, H / 2, "#f5c542"); tag(`x = ${((x - W / 2) / UNIT).toFixed(2)}`, x - 40, H / 2 + 30, "#f5c542");
+    }
+    marker(par.h, par.k); marker(par.px, par.py);
+    const A = -a * UNIT, Hm = (par.h - W / 2) / UNIT, Km = (H / 2 - par.k) / UNIT;
+    tag(`y = ${A.toFixed(2)}(x ${Hm >= 0 ? "−" : "+"} ${Math.abs(Hm).toFixed(2)})² ${Km >= 0 ? "+" : "−"} ${Math.abs(Km).toFixed(2)}`,
+      par.h + 20, par.k - dir * 34, "#4ade80");
+    tag(`vertex (${Hm.toFixed(2)}, ${Km.toFixed(2)})`, par.h + 20, par.k - dir * 64);
+  },
+};
+
+// =====================================================================
+// MODE 2: Portal — thumb+index of both hands frame a live camera filter
+// =====================================================================
+const EFFECTS = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray"];
+const THERMAL = [[0, 0, 40], [90, 0, 170], [230, 0, 90], [255, 150, 0], [255, 255, 180]];
+const SPARK = [[255, 255, 255], [255, 120, 220], [255, 230, 120], [160, 255, 230]];
+const PIX = 6; // portal pixel size
+const small = document.createElement("canvas"), sctx = small.getContext("2d", { willReadFrequently: true });
+let effect = -1, portalOpen = false, portalGone = 0;
+function fx(l, r, g, b) {
+  switch (effect) {
+    case 0: return l < .25 ? [8, 10, 70] : l < .5 ? [25, 40, 190] : l < .72 ? [60, 120, 255] : [190, 215, 255];
+    case 1: { const t = l * 3.999, i = Math.floor(t), f = t - i, p = THERMAL[i], q = THERMAL[i + 1];
+      return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]; }
+    case 2: { const q = Math.round(l * 4) / 4; return [0, q * 255, q * 90]; }
+    case 3: return [b > 127 ? 255 : 0, r > 127 ? 230 : 20, g > 127 ? 255 : 60];
+    default: { const v = 255 - l * 255; return [v * .7, v * .9, v]; }
+  }
+}
+const portal = {
+  name: "Portal",
+  get help() { return `make an L with thumb + index on BOTH hands\nthe space between them becomes a live filter\nfilter: ${EFFECTS[Math.max(0, effect)]} — drop hands & reopen (or E) for next`; },
+  draw() {
+    if (hands.length < 2 || video.readyState < 2) {
+      if (++portalGone > 15) portalOpen = false;
+      tag("raise both hands — thumb + index make the corners", W / 2 - 200, H / 2);
+      return;
+    }
+    if (!portalOpen) { effect = (effect + 1) % EFFECTS.length; portalOpen = true; }
+    portalGone = 0;
+    const [L, Rh] = hands, quad = [L.s[8], Rh.s[8], Rh.s[4], L.s[4]];
+
+    // low-res mirrored copy of the screen, recoloured per pixel
+    const w = Math.ceil(W / PIX), h = Math.ceil(H / PIX);
+    if (small.width !== w || small.height !== h) { small.width = w; small.height = h; }
+    sctx.save(); sctx.scale(1 / PIX, 1 / PIX); sctx.translate(W, 0); sctx.scale(-1, 1);
+    sctx.drawImage(video, map.ox, map.oy, map.dw, map.dh); sctx.restore();
+    const img = sctx.getImageData(0, 0, w, h), px = img.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2], l = (.3 * r + .59 * g + .11 * b) / 255;
+      const c = l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, r, g, b);
+      px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2];
+    }
+    sctx.putImageData(img, 0, 0);
+
+    ctx.save();
+    ctx.beginPath(); quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
+    ctx.save(); ctx.clip(); ctx.imageSmoothingEnabled = false; ctx.drawImage(small, 0, 0, w * PIX, h * PIX); ctx.restore();
+    ctx.strokeStyle = "#3b82f6"; ctx.lineWidth = 2; ctx.shadowColor = "#3b82f6"; ctx.shadowBlur = 12; ctx.stroke();
+    ctx.restore();
+    quad.forEach(p => marker(p.x, p.y));
+    tag(EFFECTS[effect].toUpperCase(), Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28, "#3b82f6");
+  },
+};
+
+// =====================================================================
+// MODE 3: Particles 3D — rotate / zoom / explode a point-cloud model
+// =====================================================================
+const NP = 2200;
+const MODELS = {
+  1: ["Torus knot", i => { const t = i / NP * TAU, r = 2 + Math.cos(3 * t), j = () => (R() - .5) * .1;
+    return [r * Math.cos(2 * t) * .33 + j(), -Math.sin(3 * t) * .33 + j(), r * Math.sin(2 * t) * .33 + j()]; }],
+  2: ["DNA helix", i => {
+    if (i % 3 === 2) { const t = Math.round(R() * 30) / 30, a = t * TAU * 3, u = R() * 2 - 1; return [Math.cos(a) * .45 * u, (t - .5) * 2.6, Math.sin(a) * .45 * u]; }
+    const t = R(), a = t * TAU * 3 + (i % 3 ? Math.PI : 0); return [Math.cos(a) * .45, (t - .5) * 2.6, Math.sin(a) * .45]; }],
+  3: ["Galaxy", i => { const r = R() ** .6 * 1.3, a = r * 4 + (i % 3) * TAU / 3 + (R() - .5) * .5;
+    return [Math.cos(a) * r, (R() - .5) * .1 * (1.4 - r), Math.sin(a) * r]; }],
+  4: ["Sphere", i => { const y = 1 - 2 * (i + .5) / NP, r = Math.sqrt(1 - y * y), a = i * 2.39996;
+    return [Math.cos(a) * r * .9, y * .9, Math.sin(a) * r * .9]; }],
+  5: ["Heart", () => { const t = R() * TAU, s = Math.sqrt(R());
+    return [16 * Math.sin(t) ** 3 / 17 * s, -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) / 17 * s, (R() - .5) * .5 * s]; }],
+};
+const cloud = Array.from({ length: NP }, () => [0, 0, 0]);
+const jit = Array.from({ length: NP }, () => [R() - .5, R() - .5, R() - .5]);
+const CALLOUTS = [0, 550, 1100, 1650];
+let model = 1, targets = [];
+const setModel = n => { model = n; targets = Array.from({ length: NP }, (_, i) => MODELS[n][1](i)); };
+setModel(1);
+const view = { yaw: 0, pitch: .3, vy: 0, vx: 0, zoom: 1, boom: 0, cx: W / 2, cy: H / 2 };
+let lastPalm = null;
+const particles = {
+  name: "Particles 3D",
+  get help() { return `model: ${MODELS[model][0]} — left hand 1–5 fingers to change\nmove your right hand → spin · spread both hands → zoom\npinch → explode`; },
+  draw(now) {
+    const n = pickedCount(); if (MODELS[n] && n !== model) setModel(n);
+    const drv = hands[hands.length - 1];
+    if (drv) { const p = drv.s[9]; if (lastPalm) { view.vy += (p.x - lastPalm.x) * .0003; view.vx += (p.y - lastPalm.y) * .0003; } lastPalm = p; }
+    else lastPalm = null;
+    view.vy *= .94; view.vx *= .94;
+    view.yaw += view.vy + .003; view.pitch = clamp(view.pitch + view.vx, -1.4, 1.4);
+    if (hands.length === 2) view.zoom += (clamp(d(hands[0].s[8], hands[1].s[8]) / (W * .3), .4, 3) - view.zoom) * .15;
+    view.boom += ((hands.some(h => h.pinch < PINCH) ? 1 : 0) - view.boom) * .08;
+    const tx = hands.length === 2 ? (hands[0].s[9].x + hands[1].s[9].x) / 2 : W / 2;
+    const ty = hands.length === 2 ? (hands[0].s[9].y + hands[1].s[9].y) / 2 : H / 2;
+    view.cx += (tx - view.cx) * .15; view.cy += (ty - view.cy) * .15;
+
+    const base = Math.min(W, H) * .32 * view.zoom, b = view.boom;
+    const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw), cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
+    const proj = [];
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < NP; i++) {
+      const c = cloud[i], t = targets[i];
+      c[0] += (t[0] - c[0]) * .08; c[1] += (t[1] - c[1]) * .08; c[2] += (t[2] - c[2]) * .08;
+      const x = c[0] * (1 + b * .8) + jit[i][0] * b * 1.6, y = c[1] * (1 + b * .8) + jit[i][1] * b * 1.6, z = c[2] * (1 + b * .8) + jit[i][2] * b * 1.6;
+      const x1 = x * cy - z * sy, z1 = x * sy + z * cy, y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+      if (z2 < -3.5) continue;
+      const f = base * 4 / (z2 + 4), sx = view.cx + x1 * f, syy = view.cy + y1 * f;
+      if (CALLOUTS.includes(i)) proj.push([i, sx, syy, x, y, z]);
+      ctx.fillStyle = `hsl(${(now / 40 + y * 90 + model * 50) % 360 | 0}, 90%, ${clamp(55 - z2 * 15, 25, 75) | 0}%)`;
+      const s = clamp(f / base * 1.8, .6, 4); ctx.fillRect(sx - s / 2, syy - s / 2, s, s);
+    }
+    ctx.restore();
+
+    // HUD dressing: orbit ring, callouts with live coordinates, hand-to-hand measure
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,240,200,.7)"; ctx.lineWidth = 2; ctx.shadowColor = "#fff4c0"; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(view.cx, view.cy, base * 1.35, now / 1500, now / 1500 + 4.2); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,.55)";
+    proj.forEach(([i, sx, syy, x, y, z], k) => {
+      const lx = k % 2 ? view.cx + base * 1.6 : view.cx - base * 1.6 - 170, ly = view.cy - base * .6 + k * base * .4;
+      ctx.beginPath(); ctx.moveTo(sx, syy); ctx.lineTo(lx + (k % 2 ? 0 : 170), ly); ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.fillRect(sx - 2, syy - 2, 4, 4);
+      tag(`pt ${i}  ${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}`, lx, ly, "#fff4c0");
+    });
+    if (hands.length === 2) {
+      const a = hands[0].s[8], c = hands[1].s[8];
+      ctx.setLineDash([5, 6]); ctx.strokeStyle = "#f5c542"; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+      tag(`zoom ${view.zoom.toFixed(2)}×`, (a.x + c.x) / 2 - 40, (a.y + c.y) / 2 - 20, "#f5c542");
+    }
+    ctx.restore();
+    tag(MODELS[model][0].toUpperCase(), view.cx - 60, view.cy + base * 1.35 + 30, "#7ff0e8");
+  },
+};
+
+// =====================================================================
+// MODE 4: Paint — pinch to draw glowing strokes, fist clears
+// =====================================================================
+let strokes = [], kaleido = false, fistFrames = 0, flash = 0;
+const cur = [null, null];
+const paint = {
+  name: "Air Paint",
+  get help() { return `pinch thumb + index to draw (both hands work)\nhold a fist ~1s → clear · K → kaleidoscope ${kaleido ? "ON" : "off"}`; },
+  draw(now) {
+    hands.forEach((h, i) => {
+      const p = { x: (h.s[4].x + h.s[8].x) / 2, y: (h.s[4].y + h.s[8].y) / 2 };
+      if (h.pinch < PINCH) {
+        if (!cur[i]) { cur[i] = { pts: [], hue: (now / 15) % 360 }; strokes.push(cur[i]); }
+        const q = cur[i].pts.at(-1);
+        if (!q || d(q, p) > 3) cur[i].pts.push(p);
+      } else cur[i] = null;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, TAU); ctx.lineWidth = 2;
+      ctx.strokeStyle = h.pinch < PINCH ? "#fff" : "rgba(255,255,255,.4)"; ctx.stroke();
+    });
+    for (let i = hands.length; i < 2; i++) cur[i] = null;
+
+    const fist = hands.find(h => h.fingers === 0);
+    fistFrames = fist ? fistFrames + 1 : 0;
+    if (fist) { const p = fist.s[9]; ctx.beginPath(); ctx.arc(p.x, p.y, 30, -Math.PI / 2, -Math.PI / 2 + TAU * Math.min(1, fistFrames / 50)); ctx.strokeStyle = "#ff3b4a"; ctx.lineWidth = 4; ctx.stroke(); }
+    if (fistFrames === 50) { strokes = []; flash = 1; }
+
+    let total = strokes.reduce((n, s) => n + s.pts.length, 0);
+    while (total > 6000) total -= strokes.shift().pts.length; // shortcut: drops oldest whole strokes to stay fast
+
+    const copies = kaleido ? 6 : 1;
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = ctx.lineJoin = "round";
+    for (let k = 0; k < copies; k++) {
+      ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(k * TAU / copies); ctx.translate(-W / 2, -H / 2);
+      for (const s of strokes) {
+        if (s.pts.length < 2) continue;
+        ctx.beginPath(); s.pts.forEach((p, j) => j ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+        const hue = (s.hue + now / 20) % 360;
+        ctx.strokeStyle = `hsla(${hue}, 100%, 55%, .35)`; ctx.lineWidth = 18; ctx.stroke();
+        ctx.strokeStyle = `hsl(${hue}, 100%, 78%)`; ctx.lineWidth = 4; ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.restore();
+    if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${flash * .4})`; ctx.fillRect(0, 0, W, H); flash -= .05; }
+  },
+};
+
+// =====================================================================
+// MODE 5: Shapes — the original morphing neon shapes
+// =====================================================================
+const poly = n => t => {
+  const k = t * n, i = Math.floor(k) % n, f = k - Math.floor(k);
+  const v = j => [Math.cos(j / n * TAU - Math.PI / 2), Math.sin(j / n * TAU - Math.PI / 2)];
+  const a = v(i), b = v(i + 1);
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+};
+const SHAPES = {
+  1: ["Sine graph", (t, p) => [t * 2 - 1, -0.45 * Math.sin(t * 3 * TAU + p)]],
+  2: ["Lissajous", (t, p) => [Math.sin(3 * t * TAU + p), Math.sin(2 * t * TAU)]],
+  3: ["Triangle", poly(3)],
+  4: ["Square", poly(4)],
+  5: ["Rose", (t, p) => { const a = t * TAU, r = Math.cos(4 * a) * (0.85 + 0.15 * Math.sin(p)); return [r * Math.cos(a), r * Math.sin(a)]; }],
+};
+const ST = { shape: 5, cx: W / 2, cy: H / 2, scale: Math.min(W, H) * .25, rot: 0, bright: .8, hue: 190 }, SS = { ...ST };
+const SN = 360, spts =Array.from({ length: SN }, () => [0, 0]);
+const shapes = {
+  name: "Shapes",
+  get help() { return `shape: ${SHAPES[SS.shape][0]} — left hand 1–5 fingers\nleft pinch → dim / bright\ntwo hands: spread → size, tilt → rotate, raise right → colour`; },
+  draw(now) {
+    if (hands.length) {
+      const L = hands[0], n = pickedCount();
+      if (SHAPES[n]) ST.shape = SS.shape = n;
+      ST.bright = clamp((L.pinch - .15) / .8, .05, 1);
+      if (hands.length === 2) {
+        const a = L.s[8], b = hands[1].s[8];
+        ST.cx = (a.x + b.x) / 2; ST.cy = (a.y + b.y) / 2; ST.scale = Math.max(30, d(a, b) / 2);
+        ST.rot = Math.atan2(b.y - a.y, b.x - a.x); ST.hue = (1 - b.y / H) * 360;
+      } else {
+        const w = L.s[0], m = L.s[9];
+        ST.cx = m.x; ST.cy = m.y; ST.rot = Math.atan2(m.y - w.y, m.x - w.x) + Math.PI / 2;
+      }
+    } else ST.hue = (ST.hue + .2) % 360;
+    for (const key of ["cx", "cy", "scale", "bright", "hue"]) SS[key] += (ST[key] - SS[key]) * .15;
+    SS.rot += (((ST.rot - SS.rot + 3 * Math.PI) % TAU) - Math.PI) * .15; // shortest way round
+
+    const fn = SHAPES[SS.shape][1];
+    for (let i = 0; i < SN; i++) { const [x, y] = fn(i / (SN - 1), now / 600); spts[i][0] += (x - spts[i][0]) * .12; spts[i][1] += (y - spts[i][1]) * .12; }
+    ctx.save(); ctx.translate(SS.cx, SS.cy); ctx.rotate(SS.rot);
+    const h = SS.hue, light = 30 + 40 * SS.bright, r = SS.scale;
+    const g = ctx.createLinearGradient(-r, -r, r, r);
+    g.addColorStop(0, `hsl(${h} 100% ${light}%)`); g.addColorStop(.5, `hsl(${h + 60} 100% ${light}%)`); g.addColorStop(1, `hsl(${h + 140} 100% ${light}%)`);
+    ctx.globalAlpha = .25 + .75 * SS.bright; ctx.strokeStyle = g; ctx.fillStyle = g; ctx.lineWidth = 3; ctx.lineJoin = "round";
+    ctx.shadowColor = `hsl(${h + 60} 100% 60%)`; ctx.shadowBlur = 40 * SS.bright;
+    for (const layer of [1, .72, .48]) {
+      ctx.beginPath(); spts.forEach(([x, y], i) => i ? ctx.lineTo(x * r * layer, y * r * layer) : ctx.moveTo(x * r * layer, y * r * layer)); ctx.stroke();
+    }
+    ctx.restore();
+  },
+};
+
+// =====================================================================
+// MODE 6: Face FX — face mesh + facial expressions drive effects
+// =====================================================================
+let faceLM = false, facePts = null, blend = {}, TESS = [], CONTOURS = [];
+const STYLES = ["Wireframe", "Contours", "Dots"];
+let style = 0, eyesClosedMs = 0;
+const breath = [];
+const edges = (P, conns) => { ctx.beginPath(); for (const [a, b] of conns) { ctx.moveTo(P[a].x, P[a].y); ctx.lineTo(P[b].x, P[b].y); } };
+const unit = (x, y) => { const l = Math.hypot(x, y) || 1; return { x: x / l, y: y / l }; };
+const faceFx = {
+  name: "Face FX",
+  get help() { return `open mouth → rainbow breath\nraise eyebrows → laser eyes (point a finger to aim)\nsmile → halo · close eyes ~0.5s → mesh style (${STYLES[style]})`; },
+  draw(now, dt) {
+    if (!faceLM) { tag("face model unavailable — needs the camera", W / 2 - 170, H / 2); return; }
+    if (!facePts) { tag("look at the camera", W / 2 - 80, H / 2); return; }
+    const P = facePts, s = k => blend[k] || 0, hue = now / 20 % 360;
+    const jaw = s("jawOpen"), smile = (s("mouthSmileLeft") + s("mouthSmileRight")) / 2, brow = s("browInnerUp");
+
+    // a deliberate long blink (not a normal one) cycles the mesh style
+    eyesClosedMs = Math.min(s("eyeBlinkLeft"), s("eyeBlinkRight")) > .5 ? eyesClosedMs + dt : 0;
+    if (eyesClosedMs > 500 && eyesClosedMs - dt <= 500) style = (style + 1) % STYLES.length;
+
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    if (style === 0) { edges(P, TESS); ctx.strokeStyle = `hsla(${hue}, 100%, 65%, .35)`; ctx.lineWidth = .8; ctx.stroke(); }
+    else if (style === 1) { edges(P, CONTOURS); ctx.strokeStyle = `hsl(${hue}, 100%, 65%)`; ctx.lineWidth = 2.5; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 15; ctx.stroke(); }
+    else for (let i = 0; i < P.length; i++) { ctx.fillStyle = `hsl(${(hue + i) % 360}, 100%, 65%)`; ctx.fillRect(P[i].x - 1.5, P[i].y - 1.5, 3, 3); }
+    ctx.restore();
+
+    // rainbow breath out of the mouth, pointing away from the eyes
+    if (jaw > .25) {
+      const m = { x: (P[13].x + P[14].x) / 2, y: (P[13].y + P[14].y) / 2 }, dir = unit(m.x - P[168].x, m.y - P[168].y);
+      for (let i = 0; i < 6; i++) {
+        const sp = 3 + R() * 6 * jaw, a = (R() - .5) * .8, c = Math.cos(a), sn = Math.sin(a);
+        breath.push({ x: m.x, y: m.y, vx: (dir.x * c - dir.y * sn) * sp, vy: (dir.x * sn + dir.y * c) * sp, life: 1, hue: (hue + R() * 60) % 360 });
+      }
+    }
+    if (breath.length > 800) breath.splice(0, breath.length - 800);
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (let i = breath.length - 1; i >= 0; i--) {
+      const b = breath[i]; b.x += b.vx; b.y += b.vy; b.vx *= .98; b.vy *= .98; b.life -= .018;
+      if (b.life <= 0) { breath.splice(i, 1); continue; }
+      ctx.fillStyle = `hsla(${b.hue}, 100%, 60%, ${b.life * .5})`;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 3 + (1 - b.life) * 14, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
+
+    // laser eyes from the irises; aim at a fingertip if a hand is up, else along the nose
+    if (brow > .45) {
+      const tip = hands[0]?.s[8], fwd = unit(P[1].x - P[168].x, P[1].y - P[168].y);
+      ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+      for (const e of [P[468] || P[33], P[473] || P[263]]) {
+        const end = tip || { x: e.x + fwd.x * 2000, y: e.y + fwd.y * 2000 };
+        for (const [w, c] of [[14, "rgba(255,0,40,.35)"], [5, "#ff3b4a"], [1.5, "#fff"]]) {
+          ctx.strokeStyle = c; ctx.lineWidth = w * (.6 + brow); ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+        }
+        if (tip) for (let i = 0; i < 4; i++) sparks.push({ x: tip.x, y: tip.y, vx: (R() - .5) * 8, vy: (R() - .5) * 8, life: 1, hue: R() * 40 });
+      }
+      ctx.restore();
+    }
+
+    // smile halo above the forehead
+    if (smile > .4) {
+      const top = P[10], r = d(P[234], P[454]) * .55, cy = top.y - r * .35;
+      ctx.save(); ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = "#ffd76a"; ctx.lineWidth = 4; ctx.shadowColor = "#ffd76a"; ctx.shadowBlur = 25 * smile;
+      ctx.beginPath(); ctx.ellipse(top.x, cy, r, r * .22, 0, 0, TAU); ctx.stroke();
+      for (let i = 0; i < 12; i++) {
+        const a = now / 600 + i * TAU / 12;
+        ctx.fillStyle = `hsl(${(hue + i * 30) % 360}, 100%, 70%)`;
+        ctx.beginPath(); ctx.arc(top.x + Math.cos(a) * r, cy + Math.sin(a) * r * .22, 4, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // live expression readout
+    const roll = Math.atan2(P[263].y - P[33].y, P[263].x - P[33].x) * 180 / Math.PI;
+    const meters = [["jaw open", jaw], ["smile", smile], ["brows up", brow], ["blink L", s("eyeBlinkLeft")], ["blink R", s("eyeBlinkRight")]];
+    ctx.save(); ctx.font = FONT;
+    const x0 = W - 230; let y0 = 80;
+    ctx.fillStyle = "rgba(5,10,15,.7)"; ctx.fillRect(x0 - 12, y0 - 22, 222, meters.length * 26 + 44);
+    for (const [label, v] of meters) {
+      ctx.fillStyle = "#dff"; ctx.fillText(label, x0, y0);
+      ctx.fillStyle = "rgba(255,255,255,.15)"; ctx.fillRect(x0 + 80, y0 - 9, 110, 10);
+      ctx.fillStyle = `hsl(${160 - v * 160}, 90%, 60%)`; ctx.fillRect(x0 + 80, y0 - 9, 110 * v, 10);
+      y0 += 26;
+    }
+    ctx.fillStyle = "#7ff0e8"; ctx.fillText(`head roll ${roll.toFixed(0)}°`, x0, y0 + 4);
+    ctx.restore();
+  },
+};
+
+// ---- chip rows (fingertip dwell or click) ----
+const DWELL_MS = 700, rows = []; // rows drawn this frame, for click hit-testing
+function chipRow(names, active, y, dwell, dt, onPick) {
+  ctx.save(); ctx.font = FONT; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const widths = names.map(n => ctx.measureText(n).width + 28), gap = 8, h = 34;
+  let x = (W - widths.reduce((a, b) => a + b + gap, -gap)) / 2;
+  const chips = widths.map(w => { const r = { x, y, w, h }; x += w + gap; return r; });
+  ctx.fillStyle = "rgba(10,14,20,.72)"; ctx.beginPath(); ctx.roundRect(chips[0].x - 10, y - 8, x - gap - chips[0].x + 20, h + 16, 12); ctx.fill();
+  chips.forEach((r, i) => {
+    const over = hands.some(hd => { const p = hd.s[8]; return p.x > r.x && p.x < r.x + r.w && p.y > r.y - 12 && p.y < r.y + r.h + 12; });
+    dwell[i] = over && i !== active ? dwell[i] + dt : 0;
+    if (dwell[i] > DWELL_MS) { dwell[i] = 0; onPick(i); }
+    ctx.strokeStyle = i === active ? "#f5c542" : "rgba(255,255,255,.25)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
+    ctx.fillStyle = i === active ? "#f5c542" : "#dfe"; ctx.fillText(names[i], r.x + r.w / 2, r.y + r.h / 2);
+    if (dwell[i] > 0) { ctx.fillStyle = "#7ff0e8"; ctx.fillRect(r.x, r.y + r.h - 3, r.w * dwell[i] / DWELL_MS, 3); }
+  });
+  ctx.restore();
+  rows.push({ chips, onPick });
+}
+stage.addEventListener("click", e => rows.forEach(row => row.chips.forEach((r, i) => {
+  if (e.clientX > r.x && e.clientX < r.x + r.w && e.clientY > r.y && e.clientY < r.y + r.h) row.onPick(i);
+})));
+
+// =====================================================================
+// MODE 7: X-Ray — animated, explodable cutaways of real machines
+// =====================================================================
+// model-building primitives (model space, y up); S is the 3D sink that turns them into meshes
+const onAxis = (axis, c, a, p, q) => axis === "x" ? [c[0] + a, c[1] + p, c[2] + q] : axis === "y" ? [c[0] + p, c[1] + a, c[2] + q] : [c[0] + p, c[1] + q, c[2] + a];
+const line = (S, a, b) => S.line(a, b);
+const polyline = (S, pts, closed) => S.polyline(pts, closed);
+const ring = (S, axis, c, r, n, a, rq) => S.ring(axis, c, r, n, a, rq);
+const cyl = (S, axis, c, r, len, n, spin = null) => S.cyl(axis, c, r, len, n, spin);
+const box = (S, c, sx, sy, sz) => S.box(c, sx, sy, sz);
+const sphere = (S, c, r) => S.sphere(c, r);
+const loft = (S, prof) => S.loft(prof);
+
+// --- inline-4: real slider-crank geometry + 4-stroke cycle, firing order 1-3-4-2 ---
+const CX = [-.63, -.21, .21, .63], OFF = [0, Math.PI, 3 * Math.PI, 2 * Math.PI], RC = .12, ROD = .38;
+const STROKES = [["INTAKE", "#4fc3f7"], ["COMPRESSION", "#b388ff"], ["POWER", "#ff7043"], ["EXHAUST", "#bdbdbd"]];
+function cylState(i, th) {
+  const psi = ((th + OFF[i]) % (4 * Math.PI) + 4 * Math.PI) % (4 * Math.PI), phi = psi % TAU, st = Math.floor(psi / Math.PI);
+  return { st, frac: psi / Math.PI - st, pin: RC * Math.cos(phi) + Math.sqrt(ROD * ROD - (RC * Math.sin(phi)) ** 2), crank: [RC * Math.cos(phi), RC * Math.sin(phi)] };
+}
+// self-check: cyl 1 at top dead centre at θ=0, and power strokes go 1-3-4-2
+console.assert(Math.abs(cylState(0, 0).pin - (RC + ROD)) < 1e-9 &&
+  [2, 3, 4, 5].map(k => [0, 1, 2, 3].find(i => cylState(i, k * Math.PI + .1).st === 2)).join() === "0,2,3,1", "engine timing self-check failed");
+
+const ENGINE = { name: "I4 Engine", scale: 1, center: [0, .35, 0], stat: s => `${Math.round(s.rpm)} rpm (shown ×20 slow-mo)`, parts: [
+  { name: "Engine block", ghost: true, color: "#90a4ae", ex: [0, 0, -1], info: "Cast aluminium block. Holds the four\ncylinder bores the pistons slide in.",
+    build(S) { box(S, [0, .35, 0], 1.75, .7, .5); CX.forEach(x => cyl(S, "y", [x, .45, 0], .17, .45, 16)); } },
+  { name: "Cylinder head", ghost: true, color: "#78909c", ex: [0, .9, 0], info: "Seals the top of each cylinder and\nhouses the valves, ports and plugs.",
+    build(S) { box(S, [0, .74, 0], 1.75, .16, .5); } },
+  { name: "Pistons", color: "#eceff1", ex: [0, .25, 0], info: "Burning fuel shoves them down, turning\npressure into motion. Orange = combustion.",
+    build(S, G, s) { CX.forEach((x, i) => { const c = cylState(i, s.th); cyl(S, "y", [x, c.pin + .05, 0], .16, .1, 14);
+      if (c.st === 2 && c.frac < .4) G.push({ p: [x, c.pin + .15, 0], r: .2 * (1 - c.frac / .4) + .04, c: "255,120,40" });
+      else if (c.st === 1) G.push({ p: [x, c.pin + .15, 0], r: .04 + c.frac * .05, c: "150,110,255" }); }); } },
+  { name: "Connecting rods", color: "#b0bec5", ex: [0, 0, .35], info: "Link each piston to the crankshaft,\nturning up-and-down into rotation.",
+    build(S, G, s) { CX.forEach((x, i) => { const c = cylState(i, s.th); line(S, [x, c.pin, 0], [x, c.crank[0], c.crank[1]]); ring(S, "x", [x, c.crank[0], c.crank[1]], .035, 10); }); } },
+  { name: "Crankshaft", color: "#ffca28", ex: [0, -.55, 0], info: "Turns the pistons' push into rotation.\nInline-4 firing order: 1-3-4-2.",
+    build(S, G, s) { line(S, [-1, 0, 0], [1, 0, 0]); CX.forEach((x, i) => { const [py, pz] = cylState(i, s.th).crank;
+      for (const dx of [-.06, .06]) { line(S, [x + dx, 0, 0], [x + dx, py, pz]); line(S, [x + dx, 0, 0], [x + dx, -py * .8, -pz * .8]); }
+      line(S, [x - .06, py, pz], [x + .06, py, pz]); }); } },
+  { name: "Camshafts", color: "#ab47bc", ex: [0, 1.35, 0], info: "Spin at half crank speed; their lobes\npush the valves open at the right time.",
+    build(S, G, s) { for (const z of [-.09, .09]) { line(S, [-1, .9, z], [.9, .9, z]);
+      CX.forEach((x, i) => { const a = (s.th + OFF[i]) / 2; ring(S, "x", [x, .9 + .02 * Math.cos(a), z + .02 * Math.sin(a)], .03, 8); }); } } },
+  { name: "Valves", color: "#4fc3f7", ex: [0, 1.05, 0], info: "Intake valves (back) let air + fuel in;\nexhaust valves (front) let burnt gas out.",
+    build(S, G, s) { CX.forEach((x, i) => { const c = cylState(i, s.th);
+      for (const [z, open] of [[-.08, c.st === 0], [.08, c.st === 3]]) { const lift = open ? Math.sin(c.frac * Math.PI) * .05 : 0;
+        line(S, [x, .66 - lift, z], [x, .88, z]); ring(S, "y", [x, .66 - lift, z], .04, 10); } }); } },
+  { name: "Spark plugs", color: "#fff176", ex: [0, 1.6, 0], info: "Spark at the top of compression lights\nthe mix — that starts the power stroke.",
+    build(S, G, s) { CX.forEach((x, i) => { line(S, [x, .66, 0], [x, .98, 0]); const c = cylState(i, s.th);
+      if (c.st === 2 && c.frac < .12) G.push({ p: [x, .66, 0], r: .07, c: "255,255,200" }); }); } },
+  { name: "Flywheel", color: "#80cbc4", ex: [.6, 0, 0], info: "Heavy disc that stores momentum and\nsmooths the pulses between firings.",
+    build(S, G, s) { cyl(S, "x", [1.05, 0, 0], .32, .05, 24, s.th); } },
+  { name: "Timing belt", color: "#ffffff", ex: [-.6, 0, 0], info: "Keeps the cams in sync with the crank:\n2 crank turns per cam turn.",
+    build(S, G, s) { const xb = -1.02; ring(S, "x", [xb, 0, 0], .07, 14); ring(S, "x", [xb, .9, -.09], .07, 14); ring(S, "x", [xb, .9, .09], .07, 14);
+      polyline(S, [[xb, -.07, 0], [xb, .9, -.16], [xb, .97, -.09], [xb, .97, .09], [xb, .9, .16], [xb, -.07, 0]]);
+      line(S, [xb, 0, 0], [xb, .07 * Math.cos(s.th), .07 * Math.sin(s.th)]); } },
+  { name: "Intake manifold", color: "#4fc3f7", ex: [0, .2, -.7], info: "Ducts fresh air from the throttle body\nto each cylinder's intake port.",
+    build(S) { line(S, [-.85, .95, -.45], [.85, .95, -.45]); ring(S, "x", [-.9, .95, -.45], .06, 12);
+      CX.forEach(x => polyline(S, [[x, .74, -.25], [x, .85, -.38], [x, .95, -.45]])); } },
+  { name: "Exhaust headers", color: "#ff7043", ex: [0, -.1, .7], info: "Carry hot gas away. Glows at the\ncylinder in its exhaust stroke.",
+    build(S, G, s) { CX.forEach((x, i) => { polyline(S, [[x, .74, .25], [x, .55, .42], [.2 + x * .3, .2, .5], [1, .1, .5]]);
+      if (cylState(i, s.th).st === 3) G.push({ p: [x, .6, .38], r: .08, c: "255,90,30" }); }); } },
+] };
+
+// --- F1 car ---
+const WHEELS = [[.95, .48], [.95, -.48], [-.72, .48], [-.72, -.48]];
+const F1 = { name: "F1 Car", scale: 1, center: [.2, 0, 0], stat: s => `${Math.round(s.rpm * .036)} km/h · ${Math.round(s.rpm * 1.4)} rpm · DRS ${s.rpm > 6000 ? "OPEN" : "closed"}`, parts: [
+  { name: "Monocoque", ghost: true, color: "#e53935", ex: [0, 0, 0], info: "Carbon-fibre survival cell. The driver\nsits inside; everything bolts onto it.",
+    build(S) { loft(S, [[-.35, .15, .2], [0, .17, .22], [.4, .13, .17, -.02], [.75, .09, .12, -.05]]); } },
+  { name: "Nose cone", color: "#ef5350", ex: [.45, 0, 0], info: "Crash structure that absorbs frontal\nimpacts and feeds air under the car.",
+    build(S) { loft(S, [[.75, .09, .12, -.05], [1.05, .06, .08, -.09], [1.32, .02, .03, -.12]], 12); } },
+  { name: "Front wing", color: "#29b6f6", ex: [.75, -.1, 0], info: "Makes front downforce and steers the\nairflow around the front tyres.",
+    build(S) { for (let k = 0; k < 3; k++) { const x = 1.36 - k * .07, y = -.2 + k * .03; polyline(S, [[x, y, -.55], [x, y, .55], [x - .07, y + .01, .55], [x - .07, y + .01, -.55]], true); }
+      for (const z of [-.56, .56]) box(S, [1.27, -.14, z], .26, .14, .01); } },
+  { name: "Rear wing + DRS", color: "#29b6f6", ex: [-.6, .3, 0], info: "Main plane + flap make rear downforce.\nAbove 6000 rpm here, DRS opens the flap.",
+    build(S, G, s) { polyline(S, [[-.86, .36, -.33], [-.86, .36, .33], [-1, .38, .33], [-1, .38, -.33]], true);
+      const open = clamp((s.rpm - 6000) / 2000, 0, 1) * .08;
+      polyline(S, [[-.86, .42 + open, -.33], [-.86, .42 + open, .33], [-.96, .44, .33], [-.96, .44, -.33]], true);
+      for (const z of [-.34, .34]) box(S, [-.93, .32, z], .22, .3, .01); line(S, [-.9, .36, 0], [-.8, .05, 0]); } },
+  { name: "Halo", color: "#eeeeee", ex: [0, .5, 0], info: "Titanium hoop that protects the driver's\nhead from debris and rollovers.",
+    build(S) { for (const z of [-1, 1]) polyline(S, [[.5, .06, 0], [.43, .27, 0], [.33, .29, .13 * z], [.18, .27, .17 * z], [.08, .1, .18 * z]]); } },
+  { name: "Driver", color: "#ffee58", ex: [0, .85, 0], info: "Lies almost flat, legs forward, and\npulls up to 5 g in fast corners.",
+    build(S) { sphere(S, [.22, .2, 0], .09); ring(S, "x", [.42, .12, 0], .055, 12); } },
+  { name: "Power unit (V6 hybrid)", color: "#ff7043", ex: [0, .75, 0], info: "1.6 L turbo V6 + electric motors,\n~1000 hp. Glows = cylinders firing.",
+    build(S, G, s) { box(S, [-.32, .06, 0], .42, .22, .26);
+      for (let i = 0; i < 6; i++) { const bank = i % 2 ? 1 : -1, x = -.45 + Math.floor(i / 2) * .12; cyl(S, "y", [x, .14, bank * .07], .04, .12, 10);
+        if (Math.sin(s.th * 3 + i * TAU / 6) > .8) G.push({ p: [x, .16, bank * .07], r: .05, c: "255,120,40" }); }
+      ring(S, "x", [-.08, .12, 0], .06, 14); } },
+  { name: "Energy store", color: "#66bb6a", ex: [0, -.55, 0], info: "Battery under the fuel cell; feeds the\nMGU-K for ~160 hp of electric boost.",
+    build(S) { box(S, [.05, -.13, 0], .3, .06, .2); } },
+  { name: "Gearbox", color: "#bdbdbd", ex: [-.4, -.35, 0], info: "8-speed seamless-shift gearbox that\nalso carries the rear suspension.",
+    build(S, G, s) { box(S, [-.68, -.03, 0], .3, .16, .16); cyl(S, "z", [-.64, -.03, 0], .05, .12, 12, s.th); cyl(S, "z", [-.74, -.03, 0], .035, .12, 10, -s.th * 1.4); } },
+  { name: "Sidepods & radiators", ghost: true, color: "#ef9a9a", ex: [0, 0, .45], mirror: true, info: "Cooling inlets; radiators inside dump\nheat from the engine and batteries.",
+    build(S) { for (const z of [-.3, .3]) box(S, [.02, -.04, z], .6, .2, .16); } },
+  { name: "Wheels & tyres", color: "#9e9e9e", ex: [0, 0, .5], mirror: true, info: "18-inch rims on slick tyres. Spokes\nspin with road speed.",
+    build(S, G, s) { WHEELS.forEach(([x, z]) => { cyl(S, "z", [x, -.05, z], .21, .17, 22, s.th * .6); ring(S, "z", [x, -.05, z], .13, 16, Math.sign(z) * .09); }); } },
+  { name: "Brakes", color: "#ff8a65", ex: [0, 0, .3], mirror: true, info: "Carbon discs run at ~1000°C under\nheavy braking — hence the glow.",
+    build(S, G) { WHEELS.forEach(([x, z]) => { ring(S, "z", [x, -.05, z * .82], .1, 16); G.push({ p: [x, -.05, z * .82], r: .07, c: "255,110,40" }); }); } },
+  { name: "Suspension", color: "#e0e0e0", ex: [0, 0, .25], mirror: true, info: "Double wishbones + push rods keep the\ntyres flat on the track.",
+    build(S) { WHEELS.forEach(([x, z]) => { const sz = Math.sign(z) * .16;
+      for (const y of [.06, -.14]) { line(S, [x, y, z * .8], [x + .14, y, sz]); line(S, [x, y, z * .8], [x - .14, y, sz]); }
+      line(S, [x, -.12, z * .8], [x, .12, sz]); }); } },
+  { name: "Floor & diffuser", color: "#7e57c2", ex: [0, -.45, 0], info: "Venturi tunnels under the car suck it\nonto the track — most of the downforce.",
+    build(S) { polyline(S, [[1.1, -.24, -.2], [1.1, -.24, .2], [.6, -.24, .42], [-.75, -.24, .42], [-.75, -.24, -.42], [.6, -.24, -.42]], true);
+      for (const z of [-.3, -.15, 0, .15, .3]) line(S, [-.75, -.24, z], [-1, -.1, z]); } },
+] };
+
+// --- jet airliner with turbofan internals ---
+const ENG_Z = [.55, -.55];
+const fan = (S, x, z, r, n, a) => { ring(S, "x", [x, -.2, z], r, 18); for (let i = 0; i < n; i++) { const t = a + i / n * TAU; line(S, [x, -.2, z], [x, -.2 + r * Math.cos(t), z + r * Math.sin(t)]); } };
+const JET = { name: "Jet", scale: .8, center: [0, 0, 0], stat: s => `fan speed N1 ${Math.round(s.rpm / 90)}% (shown slow-mo)`, parts: [
+  { name: "Fuselage", ghost: true, color: "#90caf9", ex: [0, 0, 0], info: "Pressurised tube carrying passengers,\ncargo and systems.",
+    build(S) { loft(S, [[1.45, .02, .02, -.02], [1.32, .1, .1, -.01], [1.1, .17, .17], [.8, .2, .2], [-.8, .2, .2], [-1.1, .15, .13, .03], [-1.3, .08, .06, .08], [-1.45, .03, .02, .12]]); } },
+  { name: "Cockpit", color: "#fff59d", ex: [.4, .25, 0], info: "Flight deck: two pilots, fly-by-wire\ncontrols and glass displays.",
+    build(S) { polyline(S, [[1.22, .08, -.1], [1.12, .13, -.1], [1.12, .13, .1], [1.22, .08, .1]], true); sphere(S, [1.05, .02, -.06], .035); sphere(S, [1.05, .02, .06], .035); } },
+  { name: "Passenger cabin", color: "#ce93d8", ex: [0, .6, 0], info: "Floor beams + seat rows, lifted out\nso you can see the layout.",
+    build(S) { polyline(S, [[.95, -.08, -.17], [.95, -.08, .17], [-.9, -.08, .17], [-.9, -.08, -.17]], true);
+      for (let x = .85; x > -.85; x -= .1) { line(S, [x, -.04, -.15], [x, -.04, -.03]); line(S, [x, -.04, .03], [x, -.04, .15]); } } },
+  { name: "Wings", color: "#4fc3f7", ex: [0, 0, .45], mirror: true, info: "Swept wings make lift; the inner line\nis the flap that extends for landing.",
+    build(S) { for (const k of [-1, 1]) { polyline(S, [[.35, -.08, .2 * k], [-.3, -.08, .2 * k], [-.58, -.02, 1.35 * k], [-.4, -.02, 1.35 * k]], true); line(S, [-.22, -.08, .25 * k], [-.5, -.03, k]); } } },
+  { name: "Fuel tanks", color: "#66bb6a", ex: [0, -.35, .45], mirror: true, info: "Fuel is carried inside the wings,\nwhich also eases wing bending.",
+    build(S) { for (const k of [-1, 1]) box(S, [-.08, -.06, .6 * k], .3, .03, .6); } },
+  { name: "Tail", color: "#4fc3f7", ex: [-.55, .1, 0], info: "Stabiliser (pitch) and fin + rudder\n(yaw) keep the aircraft stable.",
+    build(S) { for (const k of [-1, 1]) polyline(S, [[-1, .06, .05 * k], [-1.3, .07, .05 * k], [-1.48, .09, .52 * k], [-1.36, .09, .52 * k]], true);
+      polyline(S, [[-.95, .17, 0], [-1.33, .17, 0], [-1.52, .68, 0], [-1.36, .68, 0]], true); } },
+  { name: "Engine nacelles", ghost: true, color: "#b0bec5", ex: [0, -.2, 0], info: "Casing around each turbofan. Most air\nbypasses the hot core: quieter + efficient.",
+    build(S) { ENG_Z.forEach(z => { cyl(S, "x", [.3, -.2, z], .11, .42, 20); line(S, [.3, -.09, z], [.1, -.06, z * .9]); }); } },
+  { name: "Fan", color: "#e1f5fe", ex: [.4, -.2, 0], info: "The big front fan makes most of the\nthrust by pushing air around the core.",
+    build(S, G, s) { ENG_Z.forEach(z => fan(S, .48, z, .1, 18, s.th)); } },
+  { name: "Compressor", color: "#81d4fa", ex: [.2, -.2, 0], info: "Rows of blades squeeze the core air\n~40× before it reaches the burner.",
+    build(S, G, s) { ENG_Z.forEach(z => { for (let k = 0; k < 4; k++) fan(S, .38 - k * .04, z, .075 - k * .007, 10, s.th * 1.5 + k); }); } },
+  { name: "Combustor", color: "#ff7043", ex: [0, -.32, 0], info: "Fuel sprays into the squeezed air and\nburns non-stop at ~1500°C.",
+    build(S, G, s) { ENG_Z.forEach(z => { ring(S, "x", [.2, -.2, z], .055, 14); ring(S, "x", [.14, -.2, z], .055, 14); G.push({ p: [.17, -.2, z], r: .05 + .015 * Math.sin(s.th * 3), c: "255,110,30" }); }); } },
+  { name: "Turbine", color: "#ffb74d", ex: [-.2, -.2, 0], info: "Hot gas spins the turbine, which drives\nthe fan and compressor through shafts.",
+    build(S, G, s) { ENG_Z.forEach(z => { for (let k = 0; k < 3; k++) fan(S, .08 - k * .035, z, .06 + k * .006, 12, -s.th * 1.5 + k); }); } },
+  { name: "Exhaust cone", color: "#bdbdbd", ex: [-.4, -.2, 0], info: "Shapes the hot core jet as it leaves\nthe engine.",
+    build(S, G) { ENG_Z.forEach(z => { for (let i = 0; i < 8; i++) { const t = i / 8 * TAU; line(S, [0, -.2 + .04 * Math.cos(t), z + .04 * Math.sin(t)], [-.1, -.2, z]); }
+      G.push({ p: [-.13, -.2, z], r: .05, c: "255,160,60" }); }); } },
+  { name: "Landing gear", color: "#e0e0e0", ex: [0, -.45, 0], info: "Folds into the belly after take-off;\nthe main gear carries most of the weight.",
+    build(S) { line(S, [1, -.18, 0], [1, -.36, 0]); cyl(S, "z", [1, -.38, 0], .035, .05, 10);
+      for (const z of [-.25, .25]) { line(S, [-.05, -.18, z], [-.05, -.34, z]); cyl(S, "z", [-.02, -.38, z], .045, .06, 10); cyl(S, "z", [-.1, -.38, z], .045, .06, 10); } } },
+] };
+// --- real CAD / production models, streamed in on first use ---
+const KH = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/";
+const KA = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/";
+const KN = "https://raw.githubusercontent.com/KenneyNL/Starter-Kit-Racing/main/models/";
+const CAD = [
+  { car: true, name: "Ferrari 458", url: "https://threejs.org/examples/models/gltf/ferrari.glb", about: "Detailed sports car: body, glass, interior, wheels" },
+  { car: true, name: "Car Concept", url: KA + "CarConcept/glTF-Binary/CarConcept.glb", about: "Concept car, 97 named parts: engine, cage, dash, pedals" },
+  { car: true, name: "Dune Buggy", url: KH + "Buggy/glTF-Binary/Buggy.glb", about: "LEGO Technic buggy: frame, suspension, engine, driver" },
+  { car: true, name: "Cartoon Car", url: "https://assets.babylonjs.com/meshes/car.glb", about: "Boxy cartoon car with four separate wheels" },
+  { car: true, name: "Toy Car", url: KA + "ToyCar/glTF-Binary/ToyCar.glb", about: "Toy car showing off glass + fabric materials" },
+  { car: true, name: "Milk Truck", url: KA + "CesiumMilkTruck/glTF-Binary/CesiumMilkTruck.glb", about: "Delivery truck: body + wheel sets" },
+  { car: true, name: "Toy Truck", url: KN + "vehicle-truck-red.glb", about: "Low-poly truck: body, underside, four wheels" },
+  { car: true, name: "Motorcycle", url: KN + "vehicle-motorcycle.glb", about: "Low-poly motorbike: body, fork, two wheels" },
+  { car: true, name: "Road Bike", url: "https://threejs.org/examples/models/gltf/CarbonFrameBike.glb", about: "Carbon-frame bicycle, 300+ parts" },
+  { car: true, name: "Carbon Wheel", url: "https://assets.babylonjs.com/meshes/CarbonFiberWheel.glb", about: "Carbon-fibre wheel rim, high detail" },
+  { name: "2-Cyl Engine", url: KH + "2CylinderEngine/glTF-Binary/2CylinderEngine.glb", about: "Real CAD assembly of a two-cylinder engine" },
+  { name: "Gearbox", url: KH + "GearboxAssy/glTF-Binary/GearboxAssy.glb", about: "CAD gearbox: housings, shafts and gear sets" },
+  { name: "Recip Saw", url: KH + "ReciprocatingSaw/glTF-Binary/ReciprocatingSaw.glb", about: "Power-tool CAD: motor, gearing and blade drive" },
+];
+F1.car = true;
+const MACHINES = [F1, ...CAD.filter(m => m.car), ENGINE, JET, ...CAD.filter(m => !m.car)];
+const STYLES3D = ["Hologram", "Solid"], HOLO = 0x3fe0ff, GOLD = 0xffb43c;
+
+const xr = { m: 0, style: 0, yaw: .7, pitch: .35, vy: 0, vx: 0, zoom: 1, boom: 0, th: 0, rpm: 1500, last: null, pinchY: null, explodeKey: false, sel: -1 };
+const sdwell = STYLES3D.map(() => 0);
+// bottom-right model picker: cars first; fingertip dwell or click to open and choose
+const dd = { open: false, armed: true, bt: 0, dwell: MACHINES.map(() => 0), idle: 0 };
+function modelDropdown(dt) {
+  const w = 240, rh = 24, x = W - w - 24, by = H - 152, bh = 34, tips = hands.map(h => h.s[8]);
+  const inside = (r, p) => p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h;
+  const toggle = () => { dd.open = !dd.open; dd.idle = 0; };
+  ctx.save(); ctx.font = FONT; ctx.textBaseline = "middle";
+
+  const btn = { x, y: by, w, h: bh }, onBtn = tips.some(p => inside(btn, p));
+  if (onBtn && dd.armed) { dd.bt += dt; if (dd.bt > DWELL_MS) { toggle(); dd.armed = false; dd.bt = 0; } }
+  else { dd.bt = 0; if (!onBtn) dd.armed = true; } // must leave the button before it can toggle again
+  rows.push({ chips: [btn], onPick: toggle });
+  ctx.fillStyle = "rgba(5,10,15,.85)"; ctx.strokeStyle = dd.open ? "#ffb43c" : "#7ff0e8";
+  ctx.beginPath(); ctx.roundRect(x, by, w, bh, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#dff"; ctx.fillText(`MODEL  ${MACHINES[xr.m].name}`, x + 12, by + bh / 2);
+  ctx.fillStyle = ctx.strokeStyle; ctx.fillText(dd.open ? "▾" : "▴", x + w - 22, by + bh / 2);
+  if (dd.bt > 0) { ctx.fillStyle = "#7ff0e8"; ctx.fillRect(x, by + bh - 3, w * dd.bt / DWELL_MS, 3); }
+
+  if (dd.open) {
+    const list = [["CARS & VEHICLES", MACHINES.filter(m => m.car)], ["ENGINES & MACHINES", MACHINES.filter(m => !m.car)]];
+    const n = list.reduce((k, [, ms]) => k + ms.length + 1, 0);
+    let y = by - 8 - n * rh;
+    ctx.fillStyle = "rgba(5,10,15,.92)"; ctx.strokeStyle = "rgba(127,240,232,.5)";
+    ctx.beginPath(); ctx.roundRect(x, y - 6, w, n * rh + 12, 8); ctx.fill(); ctx.stroke();
+    let hovering = false;
+    for (const [title, ms] of list) {
+      ctx.fillStyle = "#7ff0e8"; ctx.globalAlpha = .7; ctx.fillText(title, x + 12, y + rh / 2); ctx.globalAlpha = 1; y += rh;
+      for (const m of ms) {
+        const i = MACHINES.indexOf(m), r = { x, y, w, h: rh }, over = tips.some(p => inside(r, p)) || inside(r, mouse);
+        hovering ||= over;
+        dd.dwell[i] = over && tips.some(p => inside(r, p)) && i !== xr.m ? dd.dwell[i] + dt : 0;
+        const pick = () => { xr.m = i; dd.open = false; };
+        if (dd.dwell[i] > DWELL_MS) { dd.dwell[i] = 0; pick(); }
+        rows.push({ chips: [r], onPick: pick });
+        if (over || i === xr.m) { ctx.fillStyle = i === xr.m ? "rgba(255,180,60,.18)" : "rgba(127,240,232,.12)"; ctx.fillRect(x + 4, y + 1, w - 8, rh - 2); }
+        ctx.fillStyle = i === xr.m ? "#ffb43c" : "#dff"; ctx.fillText(`${i === xr.m ? "●" : "○"}  ${m.name}`, x + 18, y + rh / 2);
+        if (m.parts) { ctx.fillStyle = "rgba(127,240,232,.6)"; ctx.fillText("live", x + w - 44, y + rh / 2); }
+        if (dd.dwell[i] > 0) { ctx.fillStyle = "#7ff0e8"; ctx.fillRect(x + 4, y + rh - 3, (w - 8) * dd.dwell[i] / DWELL_MS, 3); }
+        y += rh;
+      }
+    }
+    dd.idle = hovering || onBtn ? 0 : dd.idle + dt;
+    if (dd.idle > 5000) dd.open = false; // tidy away if ignored
+  }
+  ctx.restore();
+}
+const mouse = { x: 0, y: 0, t: -1e9, down: false };
+stage.addEventListener("mousedown", () => mouse.down = true);
+addEventListener("mouseup", () => mouse.down = false);
+stage.addEventListener("mousemove", e => {
+  if (mouse.down && MODES[mode] === xray) { xr.vy += e.movementX * .0006; xr.vx += e.movementY * .0006; }
+  mouse.x = e.clientX; mouse.y = e.clientY; mouse.t = performance.now();
+});
+stage.addEventListener("wheel", e => { xr.zoom = clamp(xr.zoom * (e.deltaY > 0 ? .92 : 1.08), .4, 3); }, { passive: true });
+
+// ---- three.js scene: loaded lazily the first time X-Ray opens ----
+let G3 = null, g3Loading = false, g3Error = "";
+const basisQ = (THREE, p, q, a) => new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...p), new THREE.Vector3(...q), new THREE.Vector3(...a)));
+async function init3D() {
+  g3Loading = true;
+  try {
+    const THREE = await import("three");
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const { DRACOLoader } = await import("three/addons/loaders/DRACOLoader.js");
+    const { RoomEnvironment } = await import("three/addons/environments/RoomEnvironment.js");
+    const { KTX2Loader } = await import("three/addons/loaders/KTX2Loader.js");
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(DPR); renderer.setSize(W, H, false);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    const scene = new THREE.Scene();
+    scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture;
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(3, 5, 4); scene.add(sun);
+    const camera = new THREE.PerspectiveCamera(35, W / H, .05, 100);
+    const holder = new THREE.Group(); scene.add(holder);
+
+    // holo table: grid + partial rings slowly turning under the model
+    const table = new THREE.Group(); table.position.y = -1.25; scene.add(table);
+    const grid = new THREE.GridHelper(6, 30, HOLO, HOLO); grid.material.transparent = true; grid.material.opacity = .16; table.add(grid);
+    const ringMat = new THREE.MeshBasicMaterial({ color: HOLO, transparent: true, opacity: .4, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
+    const rings = [1.2, 1.6, 2.1].map((r, i) => {
+      const m = new THREE.Mesh(new THREE.RingGeometry(r, r + .015 + i * .01, 96, 1, 0, TAU * (.55 + i * .15)), ringMat);
+      m.rotation.x = -Math.PI / 2; table.add(m); return m;
+    });
+
+    // hologram look: fresnel rim + moving scanlines, additive
+    const uTime = { value: 0 };
+    const holoMat = () => new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: new THREE.Color(HOLO) }, uTime, uAlpha: { value: 1 } },
+      vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vW;
+        void main() { vec4 w = modelMatrix * vec4(position, 1.); vW = w.xyz; vN = normalize(mat3(modelMatrix) * normal);
+          vV = normalize(cameraPosition - w.xyz); gl_Position = projectionMatrix * viewMatrix * w; }`,
+      fragmentShader: `uniform vec3 uColor; uniform float uTime; uniform float uAlpha; varying vec3 vN; varying vec3 vV; varying vec3 vW;
+        void main() { float f = pow(1. - abs(dot(normalize(vN), vV)), 2.); float scan = .5 + .5 * sin(vW.y * 90. - uTime * 4.);
+          gl_FragColor = vec4(uColor * (.5 + f * 1.5), (.07 + f * .85) * (.7 + .3 * scan) * uAlpha); }`,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const edgeMat = () => new THREE.LineBasicMaterial({ color: HOLO, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false });
+    const UNIT = { box: new THREE.BoxGeometry(1, 1, 1), cyl: new THREE.CylinderGeometry(1, 1, 1, 28), rod: new THREE.CylinderGeometry(1, 1, 1, 8),
+      ring: new THREE.TorusGeometry(1, .07, 10, 48), sphere: new THREE.SphereGeometry(1, 24, 16) };
+    const EDGE = { box: new THREE.EdgesGeometry(UNIT.box), cyl: new THREE.EdgesGeometry(UNIT.cyl, 40) };
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const g = c.getContext("2d"), rg = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    rg.addColorStop(0, "#fff"); rg.addColorStop(1, "rgba(255,255,255,0)"); g.fillStyle = rg; g.fillRect(0, 0, 64, 64);
+    const loader = new GLTFLoader().setDRACOLoader(new DRACOLoader().setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/"))
+      .setKTX2Loader(new KTX2Loader().setTranscoderPath("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/basis/").detectSupport(renderer));
+    G3 = { THREE, renderer, scene, camera, holder, rings, uTime, holoMat, edgeMat, UNIT, EDGE, loader, glowTex: new THREE.CanvasTexture(c),
+      ray: new THREE.Raycaster(), cache: new Map(), Y: new THREE.Vector3(0, 1, 0),
+      AX: { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) },
+      // torus lies in local XY: map local X,Y onto the ring plane and local Z onto its axis (right-handed)
+      BASIS: { x: basisQ(THREE, [0, 1, 0], [0, 0, 1], [1, 0, 0]), y: basisQ(THREE, [1, 0, 0], [0, 0, 1], [0, -1, 0]), z: basisQ(THREE, [1, 0, 0], [0, 1, 0], [0, 0, 1]) } };
+  } catch (e) { g3Error = "3D engine failed to load: " + e.message; }
+}
+
+// ---- procedural machines: build() calls become pooled meshes, rebuilt every frame so they animate ----
+function procScene(M) {
+  const { THREE } = G3, group = new THREE.Group();
+  const parts = M.parts.map((pt, idx) => {
+    const g = new THREE.Group(); group.add(g);
+    return { pt, g, idx, pool: [], glows: [], i: 0, gi: 0, holo: G3.holoMat(), edge: G3.edgeMat(),
+      solid: new THREE.MeshStandardMaterial({ color: pt.color, metalness: .6, roughness: .35, transparent: true }),
+      tint: new THREE.Color(HOLO).lerp(new THREE.Color(pt.color), .3) };
+  });
+  return { M, group, parts, proc: true, labeled: parts.map((_, i) => i) };
+}
+function grab(P, kind, makeGeo) { // next pooled mesh of this kind (call order is stable per part)
+  let m = P.pool[P.i];
+  if (!m || m.userData.kind !== kind) {
+    if (m) P.g.remove(m);
+    m = new G3.THREE.Mesh(makeGeo ? makeGeo() : G3.UNIT[kind], P.holo);
+    m.userData = { kind, part: P.idx };
+    if (G3.EDGE[kind]) m.add(new G3.THREE.LineSegments(G3.EDGE[kind], P.edge));
+    P.pool[P.i] = m; P.g.add(m);
+  }
+  P.i++; m.visible = true; return m;
+}
+function loftGeo(prof, n) {
+  const pos = [], idx = [];
+  prof.forEach(([x, ry, rz, yc = 0]) => { for (let i = 0; i <= n; i++) { const t = i / n * TAU; pos.push(x, yc + ry * Math.cos(t), rz * Math.sin(t)); } });
+  for (let r = 0; r < prof.length - 1; r++) for (let i = 0; i < n; i++) { const a = r * (n + 1) + i, b = a + n + 1; idx.push(a, b, a + 1, b, b + 1, a + 1); }
+  const g = new G3.THREE.BufferGeometry(); g.setAttribute("position", new G3.THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+function sinkFor(P, boom) {
+  const { THREE } = G3, e = P.pt.ex;
+  const off = p => new THREE.Vector3(p[0] + e[0] * boom, p[1] + e[1] * boom, p[2] + e[2] * boom * (P.pt.mirror ? Math.sign(p[2]) : 1));
+  const S = {
+    off,
+    line(a, b) {
+      const A = off(a), B = off(b), dir = B.clone().sub(A), len = dir.length() || 1e-4, m = grab(P, "rod");
+      m.position.copy(A).add(B).multiplyScalar(.5); m.quaternion.setFromUnitVectors(G3.Y, dir.divideScalar(len)); m.scale.set(.012, len, .012);
+    },
+    polyline(pts, closed) {
+      for (let i = 0; i < pts.length - (closed ? 0 : 1); i++) S.line(pts[i], pts[(i + 1) % pts.length]);
+      if (!closed || pts.length < 3) return;
+      const m = grab(P, "poly" + pts.length, () => { // filled panel (triangle fan), vertices updated each frame
+        const g = new THREE.BufferGeometry(), idx = [];
+        g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pts.length * 3), 3));
+        for (let i = 1; i < pts.length - 1; i++) idx.push(0, i, i + 1);
+        g.setIndex(idx); return g;
+      });
+      const pa = m.geometry.attributes.position; pts.forEach((p, i) => off(p).toArray(pa.array, i * 3));
+      pa.needsUpdate = true; m.geometry.computeVertexNormals(); m.geometry.computeBoundingSphere();
+    },
+    ring(axis, c, r, n, a = 0, rq = r) {
+      const m = grab(P, "ring"); m.position.copy(off(onAxis(axis, c, a, 0, 0))); m.quaternion.copy(G3.BASIS[axis]); m.scale.set(r, rq, Math.min(r, rq));
+    },
+    cyl(axis, c, r, len, n, spin) {
+      const m = grab(P, "cyl"); m.position.copy(off(c)); m.quaternion.setFromUnitVectors(G3.Y, G3.AX[axis]); m.scale.set(r, len, r);
+      if (spin != null) for (let i = 0; i < 6; i++) { // spokes on the face show it turning
+        const t = spin + i / 6 * TAU;
+        S.line(onAxis(axis, c, len / 2 + .004, 0, 0), onAxis(axis, c, len / 2 + .004, r * .85 * Math.cos(t), r * .85 * Math.sin(t)));
+      }
+    },
+    box(c, sx, sy, sz) { const m = grab(P, "box"); m.position.copy(off(c)); m.scale.set(sx, sy, sz); },
+    sphere(c, r) { const m = grab(P, "sphere"); m.position.copy(off(c)); m.scale.setScalar(r); },
+    loft(prof) { const m = grab(P, "loft", () => loftGeo(prof, 32)); m.position.copy(off([0, 0, 0])); },
+  };
+  return S;
+}
+function glowFor(P, g, off) {
+  let s = P.glows[P.gi];
+  if (!s) {
+    s = new G3.THREE.Sprite(new G3.THREE.SpriteMaterial({ map: G3.glowTex, blending: G3.THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    P.glows[P.gi] = s; P.g.add(s);
+  }
+  P.gi++; s.visible = true;
+  s.material.color.setRGB(...g.c.split(",").map(v => v / 255)); s.position.copy(off(g.p)); s.scale.setScalar(g.r * 3);
+}
+
+// ---- real models: flatten to one part per mesh so each can be exploded and picked ----
+// CAD exports name most parts "body_12"; keep only real names ("Piston_123-844_0_Parts_1" -> "Piston")
+const cleanName = s => {
+  const n = (s || "").replace(/^technic_/i, "").replace(/_?SOLIDS.*$/i, "").replace(/_\d+-\d+.*$/, "").replace(/_p$/i, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_\-.:]+/g, " ").replace(/\b(body|prt|part|shape)\s+\d+\b/gi, " ").replace(/\(\d+\)|\b(mesh|node|parts?|prt|instance|solids|solid\d*)\b/gi, " ").replace(/(\s+\d+)+\s*$/, "").replace(/\s+/g, " ").trim();
+  return /[a-z]{3}/i.test(n) ? n : "";
+};
+function cadScene(M) {
+  const { THREE } = G3, SC = { M, group: new THREE.Group(), parts: [], labeled: [], status: "downloading model…" };
+  G3.loader.load(M.url, gltf => {
+    const root = new THREE.Group(), meshes = [];
+    gltf.scene.updateMatrixWorld(true);
+    gltf.scene.traverse(o => { if (o.isMesh) meshes.push([o, o.name || o.parent?.name]); });
+    meshes.forEach(([m]) => root.attach(m));
+    const box = new THREE.Box3().setFromObject(root), c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+    const k = 2.6 / Math.max(size.x, size.y, size.z);
+    SC.parts = meshes.map(([m, name], idx) => {
+      const b = new THREE.Box3().setFromObject(m), bc = b.getCenter(new THREE.Vector3()), bs = b.getSize(new THREE.Vector3());
+      const solid = [].concat(m.material).map(x => { const y = x.clone(); y.userData.e0 = y.emissive?.clone(); return y; });
+      const edge = G3.edgeMat();
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry, 30), edge));
+      m.userData = { part: idx };
+      return { m, solid: Array.isArray(m.material) ? solid : solid[0], holo: G3.holoMat(), edge, tint: new THREE.Color(HOLO),
+        home: m.position.clone(), dir: bc.clone().sub(c), center: bc, vol: bs.x * bs.y * bs.z,
+        named: !!cleanName(name), pt: { name: cleanName(name) || `piece ${idx + 1}`, color: "#7ff0e8", info: `${M.about}.\npiece ${idx + 1} of ${meshes.length} in the assembly` } };
+    });
+    const seen = new Set(); // biggest named parts, one label per name
+    SC.labeled = SC.parts.map((_, i) => i).filter(i => SC.parts[i].named).sort((a, b) => SC.parts[b].vol - SC.parts[a].vol)
+      .filter(i => !seen.has(SC.parts[i].pt.name) && seen.add(SC.parts[i].pt.name)).slice(0, 12);
+    root.scale.setScalar(k); root.position.copy(c).multiplyScalar(-k);
+    SC.group.add(root); SC.status = "";
+  }, x => { if (x.total) SC.status = x.loaded < x.total ? `downloading model ${Math.round(x.loaded / x.total * 100)}%` : "unpacking model…"; },
+  e => { SC.status = "model failed to load: " + (e.message || "network error"); });
+  return SC;
+}
+
+const xray = {
+  name: "X-Ray",
+  get help() {
+    const M = MACHINES[xr.m];
+    return `${M.name} — ${M.stat ? M.stat(xr) : M.about}\nopen hand → spin it · pinch + drag up/down → zoom\nspread both hands apart → explode it (or X)\npoint at a part → what it is · H → hologram / solid${M.stat ? "\nraise your hand (or ↑ ↓) → speed" : ""}\npick a model: MODEL menu, bottom right`;
+  },
+  draw(now, dt) {
+    ctx.fillStyle = "rgba(0,12,24,.45)"; ctx.fillRect(0, 0, W, H); // darker blue workshop
+
+    // gestures: one open hand spins (+ sets speed), one pinching hand zooms, two hands spread = explode
+    const drv = hands.length === 1 ? hands[0] : null;
+    if (drv && drv.pinch < PINCH) {
+      if (xr.pinchY != null) xr.zoom = clamp(xr.zoom * (1 - (drv.s[8].y - xr.pinchY) * .004), .4, 3);
+      xr.pinchY = drv.s[8].y; xr.last = null;
+    } else if (drv) {
+      const p = drv.s[9];
+      if (xr.last) { xr.vy += (p.x - xr.last.x) * .0003; xr.vx += (p.y - xr.last.y) * .0003; }
+      xr.last = p; xr.pinchY = null;
+      xr.rpm += (600 + clamp(1 - p.y / H, 0, 1) * 8400 - xr.rpm) * .05;
+    } else { xr.last = null; xr.pinchY = null; }
+    xr.vy *= .92; xr.vx *= .92;
+    xr.yaw += xr.vy + (xr.sel >= 0 ? 0 : .0015); xr.pitch = clamp(xr.pitch + xr.vx, -1.3, 1.3); // idle spin pauses while pointing
+    const spread = hands.length === 2 ? clamp((d(hands[0].s[8], hands[1].s[8]) / W - .25) / .35, 0, 1) : 0;
+    xr.boom += (Math.max(spread, xr.explodeKey ? 1 : 0) - xr.boom) * .1;
+    xr.th += xr.rpm / 60 / 20 * TAU * dt / 1000; // ×20 slow-mo so the motion stays readable
+
+    const tabs = () => { chipRow(STYLES3D, xr.style, 16, sdwell, dt, i => xr.style = i); modelDropdown(dt); };
+    if (!G3) { tabs(); if (!g3Loading) init3D(); tag(g3Error || "loading 3D engine…", W / 2 - 90, H / 2); return; }
+    const { THREE, camera, renderer } = G3, M = MACHINES[xr.m];
+    let SC = G3.cache.get(M);
+    if (!SC) { SC = M.url ? cadScene(M) : procScene(M); G3.cache.set(M, SC); }
+    if (G3.holder.children[0] !== SC.group) { G3.holder.clear(); G3.holder.add(SC.group); }
+
+    if (SC.proc) {
+      SC.group.scale.setScalar(M.scale); SC.group.position.set(...M.center.map(v => -v * M.scale));
+      for (const P of SC.parts) {
+        P.i = P.gi = 0;
+        const S = sinkFor(P, xr.boom), glows = [];
+        P.pt.build(S, glows, xr);
+        glows.forEach(g => glowFor(P, g, S.off));
+        for (let k = P.i; k < P.pool.length; k++) P.pool[k].visible = false;
+        for (let k = P.gi; k < P.glows.length; k++) P.glows[k].visible = false;
+      }
+    } else for (const P of SC.parts) P.m.position.copy(P.home).addScaledVector(P.dir, xr.boom * .6);
+
+    const dist = 5.6 * (1 + xr.boom * .45) / xr.zoom;
+    camera.position.set(Math.sin(xr.yaw) * Math.cos(xr.pitch), Math.sin(xr.pitch), Math.cos(xr.yaw) * Math.cos(xr.pitch)).multiplyScalar(dist);
+    camera.lookAt(0, 0, 0);
+    if (camera.aspect !== W / H) { camera.aspect = W / H; camera.updateProjectionMatrix(); renderer.setSize(W, H, false); }
+    G3.scene.updateMatrixWorld();
+
+    // screen-space centroid of every part, for callouts
+    const v = new THREE.Vector3(), toScr = p => { v.copy(p).project(camera); return [(v.x + 1) / 2 * W, (1 - v.y) / 2 * H]; };
+    const cent = SC.parts.map(P => {
+      if (!SC.proc) return toScr(P.m.parent.localToWorld(P.center.clone().addScaledVector(P.dir, xr.boom * .6)));
+      const acc = new THREE.Vector3(), w = new THREE.Vector3();
+      for (let k = 0; k < P.i; k++) acc.add(P.pool[k].getWorldPosition(w));
+      return toScr(acc.divideScalar(P.i || 1));
+    });
+    ctx.font = FONT;
+    const cx = W / 2, L = SC.labeled.map(i => ({ i, side: cent[i][0] < cx ? 0 : 1, y: cent[i][1], w: ctx.measureText(SC.parts[i].pt.name).width + 16 }));
+    for (const side of [0, 1]) {
+      const col = L.filter(l => l.side === side).sort((p, q) => p.y - q.y);
+      let y = 200; col.forEach(l => { l.y = Math.max(l.y, y + 28); y = l.y; });
+      const over = y - (H - 170); if (over > 0) col.forEach(l => l.y -= over);
+      col.forEach(l => { l.x = clamp(side ? cx + W * .28 : cx - W * .28 - l.w, 8, W - l.w - 8); });
+    }
+
+    // pointing: labels first, then a real ray into the 3D parts (shells are skipped so you can reach inside)
+    const ptrs = hands.map(h => h.s[8]); if (now - mouse.t < 3000) ptrs.push(mouse);
+    const pickables = SC.proc ? SC.parts.filter(P => !P.pt.ghost).flatMap(P => P.pool.slice(0, P.i)) : SC.parts.map(P => P.m);
+    const repick = (xr.tick = (xr.tick || 0) + 1) % 3 === 0; // re-pick every 3rd frame: ray-testing big CAD meshes is costly
+    let sel = repick || !ptrs.length || xr.sel >= SC.parts.length ? -1 : xr.sel;
+    if (repick) for (const p of ptrs) {
+      for (const l of L) if (p.x > l.x && p.x < l.x + l.w && Math.abs(p.y - l.y) < 13) sel = l.i;
+      if (sel < 0) {
+        G3.ray.setFromCamera(new THREE.Vector2(p.x / W * 2 - 1, 1 - p.y / H * 2), camera);
+        const hit = G3.ray.intersectObjects(pickables, false)[0];
+        if (hit) sel = hit.object.userData.part;
+      }
+    }
+    xr.sel = sel;
+
+    SC.parts.forEach((P, i) => {
+      const on = i === sel, dim = sel >= 0 && !on, ghost = P.pt.ghost, op = on ? 1 : dim ? .22 : ghost ? .16 : 1;
+      [].concat(P.solid).forEach(m => {
+        m.transparent = op < 1; m.opacity = op; m.depthWrite = op >= 1;
+        if (m.emissive) on ? m.emissive.setHex(0x5a3a00) : m.emissive.copy(m.userData.e0 || new THREE.Color(0));
+      });
+      P.holo.uniforms.uColor.value.copy(on ? new THREE.Color(GOLD) : P.tint);
+      P.holo.uniforms.uAlpha.value = on ? 1.5 : dim ? .3 : ghost ? .45 : 1;
+      P.edge.color.setHex(on ? GOLD : HOLO); P.edge.opacity = on ? .95 : dim ? .12 : .5; P.edge.visible = xr.style === 0;
+      const mat = xr.style ? P.solid : P.holo;
+      if (SC.proc) for (let k = 0; k < P.i; k++) P.pool[k].material = mat; else P.m.material = mat;
+    });
+    G3.uTime.value = now / 1000;
+    G3.rings.forEach((r, i) => r.rotation.z = now / 2500 * (i % 2 ? -1 : 1) * (1 + i * .3));
+    renderer.render(G3.scene, camera);
+    ctx.drawImage(renderer.domElement, 0, 0, W, H);
+
+    // callouts
+    const labelCol = i => i === sel ? "#ffb43c" : xr.style ? SC.parts[i].pt.color : "#7ff0e8";
+    ctx.save(); ctx.lineWidth = 1;
+    for (const l of L) {
+      const [x, y] = cent[l.i]; ctx.globalAlpha = l.i === sel ? 1 : .5; ctx.strokeStyle = ctx.fillStyle = labelCol(l.i);
+      ctx.beginPath(); ctx.moveTo(l.side ? l.x : l.x + l.w, l.y); ctx.lineTo(x, y); ctx.stroke(); ctx.fillRect(x - 2, y - 2, 4, 4);
+    }
+    ctx.restore();
+    for (const l of L) tag(SC.parts[l.i].pt.name, l.x, l.y, labelCol(l.i));
+    if (SC.status) tag(SC.status, cx - 100, H / 2);
+    else tag(xr.boom > .5 ? "EXPLODED VIEW" : "ASSEMBLED", cx - 60, H - 110, "#f5c542");
+
+    if (sel >= 0) { // info card for the part being pointed at
+      const p = SC.parts[sel].pt, lines = p.info.split("\n");
+      ctx.save(); ctx.font = FONT;
+      const w = Math.max(...lines.map(s => ctx.measureText(s).width), 160) + 28, h = 40 + lines.length * 20, x = 24, y = H - 172 - h;
+      ctx.fillStyle = "rgba(5,10,15,.88)"; ctx.fillRect(x, y, w, h); ctx.strokeStyle = "#ffb43c"; ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = "#ffb43c"; ctx.font = "bold 15px ui-monospace, Menlo, monospace"; ctx.fillText(p.name, x + 14, y + 24);
+      ctx.font = FONT; ctx.fillStyle = "#dff"; lines.forEach((s, i) => ctx.fillText(s, x + 14, y + 48 + i * 20));
+      ctx.restore();
+    }
+    if (M === ENGINE) { // live 4-stroke table
+      ctx.save(); ctx.font = FONT; const x0 = W - 210;
+      ctx.fillStyle = "rgba(5,10,15,.7)"; ctx.fillRect(x0 - 12, 52, 198, 132);
+      ctx.fillStyle = "#7ff0e8"; ctx.fillText("CYL  STROKE", x0, 74);
+      CX.forEach((_, i) => { const [nm, col] = STROKES[cylState(i, xr.th).st]; ctx.fillStyle = col; ctx.fillText(`${i + 1}    ${nm}`, x0, 100 + i * 22); });
+      ctx.restore();
+    }
+    tabs(); // menus last so they sit above the callouts
+  },
+};
+
+// ---- modes, bottom bar, keys ----
+const MODES = [parabola, portal, particles, paint, shapes, faceFx, xray];
+let mode = 0;
+const dwell = MODES.map(() => 0);
+const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
+addEventListener("keydown", e => {
+  const n = +e.key; if (n >= 1 && n <= MODES.length) mode = n - 1;
+  if (e.key === "e") effect = (effect + 1) % EFFECTS.length;
+  if (e.key === "k") kaleido = !kaleido;
+  if (e.key === "c") strokes = [];
+  if (e.key === "x") xr.explodeKey = !xr.explodeKey;
+  if (e.key === "h") xr.style = 1 - xr.style;
+  if (e.key === "+" || e.key === "=") xr.zoom = Math.min(3, xr.zoom * 1.1);
+  if (e.key === "-") xr.zoom = Math.max(.4, xr.zoom / 1.1);
+  if (e.key === "ArrowUp") xr.rpm = Math.min(9000, xr.rpm + 500);
+  if (e.key === "ArrowDown") xr.rpm = Math.max(600, xr.rpm - 500);
+});
+
+// ---- always-on layers: camera, skeletons, fingertip sparks ----
+let CONN = [];
+function background() {
+  if (video.readyState >= 2) {
+    ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(video, map.ox, map.oy, map.dw, map.dh); ctx.restore();
+    ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect(0, 0, W, H);
+  } else { ctx.fillStyle = "#05070a"; ctx.fillRect(0, 0, W, H); }
+}
+function drawHands() {
+  ctx.save(); ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(255,255,255,.75)"; ctx.fillStyle = "#fff";
+  for (const h of hands) {
+    ctx.beginPath(); for (const [a, b] of CONN) { ctx.moveTo(h.s[a].x, h.s[a].y); ctx.lineTo(h.s[b].x, h.s[b].y); } ctx.stroke();
+    for (const p of h.s) { ctx.beginPath(); ctx.arc(p.x, p.y, 2.5, 0, TAU); ctx.fill(); }
+  }
+  ctx.restore();
+}
+const sparks = [];
+function sparkles(now) {
+  for (const h of hands) for (const i of [4, 8, 12, 16, 20])
+    sparks.push({ x: h.s[i].x, y: h.s[i].y, vx: (R() - .5) * 1.5, vy: (R() - .5) * 1.5 - .3, life: 1, hue: (now / 20 + i * 15) % 360 });
+  if (sparks.length > 600) sparks.splice(0, sparks.length - 600);
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i]; s.x += s.vx; s.y += s.vy; s.life -= .025;
+    if (s.life <= 0) { sparks.splice(i, 1); continue; }
+    ctx.fillStyle = `hsla(${s.hue}, 100%, 60%, ${s.life})`; ctx.fillRect(s.x - 1.5, s.y - 1.5, 3, 3);
+  }
+  ctx.restore();
+}
+
+// ---- hand tracking: inference runs in tracker.js (a worker), results eased onto the screen every frame ----
+const pair = c => [c.start ?? c[0], c.end ?? c[1]];
+CONN = HandLandmarker.HAND_CONNECTIONS.map(pair);
+TESS = FaceLandmarker.FACE_LANDMARKS_TESSELATION.map(pair);
+CONTOURS = FaceLandmarker.FACE_LANDMARKS_CONTOURS.map(pair);
+const tracker = new Worker("tracker.js");
+let trackerReady = false, busy = false, lastVideoTime = -1, startError = "", target = [];
+tracker.onmessage = ({ data }) => {
+  if (data.type === "ready") { trackerReady = true; faceLM = data.face; }
+  else if (data.type === "error") { busy = false; console.warn("tracker:", data.message); }
+  else if (data.type === "result") {
+    busy = false;
+    target = data.hands.map(lm => ({ lm, s: lm.map(toScreen), fingers: countFingers(lm), pinch: pinchOf(lm) })).sort((a, b) => a.s[0].x - b.s[0].x);
+    if (data.face) { facePts = data.face.lm?.map(toScreen) || null; blend = Object.fromEntries(data.face.bs); }
+    const msg = target.length ? `TRACKING ${target.length} HAND${target.length > 1 ? "S" : ""}` : "NO HANDS";
+    if (status.textContent !== msg) status.textContent = msg;
+  }
+};
+async function init() {
+  try {
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+    await video.play();
+    tracker.postMessage({ type: "init" });
+  } catch (e) {
+    startError = `camera failed: ${e.message}\nallow camera access and open via http://localhost or https (demo mode below)\n\n`;
+    status.textContent = "NO CAMERA";
+  }
+}
+// hand one camera frame to the worker; never more than one in flight, so slow devices just track at a lower rate
+async function pump() {
+  if (!trackerReady || busy || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  busy = true; lastVideoTime = video.currentTime;
+  try {
+    const bitmap = await createImageBitmap(video);
+    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantFace: MODES[mode] === faceFx }, [bitmap]);
+  } catch { busy = false; }
+}
+// glide on-screen points toward the latest detection, so motion is smooth at display rate between ~30 Hz results
+function easeHands(dt) {
+  if (target.length !== hands.length) { hands = target; return; }
+  const k = 1 - Math.exp(-dt / 35);
+  hands = target.map((h, i) => ({ ...h, s: h.s.map((p, j) => { const q = hands[i].s[j]; return { x: q.x + (p.x - q.x) * k, y: q.y + (p.y - q.y) * k }; }) }));
+}
+
+let last = performance.now(), hudHtml = "";
+function frame(now) {
+  const dt = now - last; last = now;
+  rows.length = 0;
+  pump();
+  easeHands(dt);
+  background();
+  MODES[mode].draw(now, dt);
+  drawHands();
+  sparkles(now);
+  modeBar(dt);
+  const html = `${startError}<b>${MODES[mode].name.toUpperCase()}</b>\n${MODES[mode].help}\n\nhover a fingertip on a mode below to switch · keys 1–7`;
+  if (html !== hudHtml) hud.innerHTML = hudHtml = html; // only touch the DOM when the text changes
+  requestAnimationFrame(frame);
+}
+init();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
