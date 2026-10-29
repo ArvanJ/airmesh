@@ -350,25 +350,51 @@ const SHAPES = {
 };
 const ST = { shape: 5, cx: W / 2, cy: H / 2, scale: Math.min(W, H) * .25, rot: 0, bright: .8, hue: 190 }, SS = { ...ST };
 const SN = 360, spts =Array.from({ length: SN }, () => [0, 0]);
+// hand-to-hand: the shape rides one palm; pinch with the other hand and it flies over, morphing mid-air
+const PASS_MS = 480, pass = { holder: 0, from: null, start: 0, morphed: false, armed: [true, true], trail: [] };
+const palmOf = h => ({ x: (h.s[0].x + h.s[5].x + h.s[9].x + h.s[17].x) / 4, y: (h.s[0].y + h.s[5].y + h.s[9].y + h.s[17].y) / 4 });
 const shapes = {
   name: "Shapes",
-  get help() { return `shape: ${SHAPES[SS.shape][0]} — left hand 1–5 fingers\nleft pinch → dim / bright\ntwo hands: spread → size, tilt → rotate, raise right → colour`; },
+  get help() { return `shape: ${SHAPES[SS.shape][0]}\none hand: 1–5 fingers picks a shape · pinch → dim / bright\ntwo hands: pinch with the empty hand to catch it — it flies over and changes`; },
   draw(now) {
     if (hands.length) {
-      const L = hands[0], n = pickedCount();
-      if (SHAPES[n]) ST.shape = SS.shape = n;
-      ST.bright = clamp((L.pinch - .15) / .8, .05, 1);
       if (hands.length === 2) {
-        const a = L.s[8], b = hands[1].s[8];
-        ST.cx = (a.x + b.x) / 2; ST.cy = (a.y + b.y) / 2; ST.scale = Math.max(30, d(a, b) / 2);
-        ST.rot = Math.atan2(b.y - a.y, b.x - a.x); ST.hue = (1 - b.y / H) * 360;
+        hands.forEach((h, i) => { if (h.pinch > .5) pass.armed[i] = true; }); // a catch needs the pinch released first
+        const other = 1 - pass.holder;
+        if (!pass.from && hands[other].pinch < PINCH && pass.armed[other]) {
+          pass.armed[other] = false; pass.holder = other; pass.from = { x: SS.cx, y: SS.cy }; pass.start = now; pass.morphed = false;
+        }
+        ST.bright = .9;
       } else {
-        const w = L.s[0], m = L.s[9];
-        ST.cx = m.x; ST.cy = m.y; ST.rot = Math.atan2(m.y - w.y, m.x - w.x) + Math.PI / 2;
+        pass.holder = 0; pass.from = null;
+        const n = pickedCount(); if (SHAPES[n]) ST.shape = SS.shape = n;
+        ST.bright = clamp((hands[0].pinch - .15) / .8, .05, 1);
       }
-    } else ST.hue = (ST.hue + .2) % 360;
-    for (const key of ["cx", "cy", "scale", "bright", "hue"]) SS[key] += (ST[key] - SS[key]) * .15;
+      const hd = hands[pass.holder], c = palmOf(hd), w = hd.s[0], m = hd.s[9];
+      ST.cx = c.x; ST.cy = c.y - d(w, m) * .9; // float just above the palm
+      ST.rot = Math.atan2(m.y - w.y, m.x - w.x) + Math.PI / 2; ST.scale = Math.max(40, d(w, m) * 1.15);
+    } else { ST.hue = (ST.hue + .2) % 360; pass.from = null; }
+
+    if (pass.from) { // in flight: an arc from where it was to the catching palm
+      const k = Math.min(1, (now - pass.start) / PASS_MS), e = k < .5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      SS.cx = pass.from.x + (ST.cx - pass.from.x) * e;
+      SS.cy = pass.from.y + (ST.cy - pass.from.y) * e - Math.sin(Math.PI * k) * Math.max(80, d(pass.from, { x: ST.cx, y: ST.cy }) * .35);
+      if (k >= .5 && !pass.morphed) { pass.morphed = true; ST.shape = SS.shape = SS.shape % 5 + 1; ST.hue = (ST.hue + 70) % 360; }
+      pass.trail.push({ x: SS.cx, y: SS.cy, life: 1, hue: SS.hue });
+      if (k >= 1) {
+        pass.from = null;
+        for (let i = 0; i < 40; i++) { const a = R() * TAU, v = 2 + R() * 6; sparks.push({ x: SS.cx, y: SS.cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, hue: (SS.hue + R() * 90) % 360 }); }
+      }
+    }
+    for (const key of pass.from ? ["scale", "bright", "hue"] : ["cx", "cy", "scale", "bright", "hue"]) SS[key] += (ST[key] - SS[key]) * .15;
     SS.rot += (((ST.rot - SS.rot + 3 * Math.PI) % TAU) - Math.PI) * .15; // shortest way round
+
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; // comet trail behind a passing shape
+    for (let i = pass.trail.length - 1; i >= 0; i--) {
+      const p = pass.trail[i]; p.life -= .045; if (p.life <= 0) { pass.trail.splice(i, 1); continue; }
+      ctx.fillStyle = `hsla(${p.hue + 60}, 100%, 60%, ${p.life * .5})`; ctx.beginPath(); ctx.arc(p.x, p.y, SS.scale * .35 * p.life, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
 
     const fn = SHAPES[SS.shape][1];
     for (let i = 0; i < SN; i++) { const [x, y] = fn(i / (SN - 1), now / 600); spts[i][0] += (x - spts[i][0]) * .12; spts[i][1] += (y - spts[i][1]) * .12; }
