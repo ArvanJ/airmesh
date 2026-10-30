@@ -909,7 +909,7 @@ const sky = {
     // ---- shooting stars: a fast fingertip flick launches one along the flick ----
     hands.forEach((h, k) => {
       const p = h.s[8], q = this.tip[k];
-      if (q) { const vx = (p.x - q.x) / dt, vy = (p.y - q.y) / dt; if (Math.hypot(vx, vy) > 1.4 && now - this.flickT > 250) { this.flickT = now; this.meteors.push({ x: p.x, y: p.y, vx: vx * 1.2, vy: vy * 1.2, life: 1 }); } }
+      if (q) { const vx = (p.x - q.x) / dt, vy = (p.y - q.y) / dt; const sp = Math.hypot(vx, vy); if (sp > 1.4 && now - this.flickT > 250) { this.flickT = now; this.meteors.push({ x: p.x, y: p.y, vx: vx / sp * .9, vy: vy / sp * .9, life: 1 }); } } // fixed speed, so it stays on screen long enough to see
       this.tip[k] = { x: p.x, y: p.y };
     });
     this.tip.length = hands.length;
@@ -917,7 +917,7 @@ const sky = {
     this.meteors = this.meteors.filter(m => (m.life -= dt / 900) > 0);
     for (const m of this.meteors) {
       m.x += m.vx * dt; m.y += m.vy * dt;
-      const tx = m.x - m.vx * 140, ty = m.y - m.vy * 140, g = ctx.createLinearGradient(tx, ty, m.x, m.y);
+      const tx = m.x - m.vx * 260, ty = m.y - m.vy * 260, g = ctx.createLinearGradient(tx, ty, m.x, m.y);
       g.addColorStop(0, "rgba(180,200,255,0)"); g.addColorStop(1, `rgba(255,255,255,${m.life})`);
       ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(m.x, m.y); ctx.stroke();
       ctx.fillStyle = `rgba(255,255,255,${m.life})`; ctx.beginPath(); ctx.arc(m.x, m.y, 3.5, 0, TAU); ctx.fill();
@@ -936,9 +936,10 @@ const sky = {
     this.cons = this.cons.filter(c => now - c.born < 25000);
     for (const c of this.cons) {
       const fade = clamp((25000 - (now - c.born)) / 4000, 0, 1), pts = c.nodes.map(n => ({ x: P.x + Math.cos(n.p + this.a) * n.r, y: P.y + Math.sin(n.p + this.a) * n.r }));
-      ctx.strokeStyle = `rgba(190,210,255,${.55 * fade})`; ctx.lineWidth = 1.2; ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.stroke();
+      ctx.strokeStyle = `rgba(190,210,255,${.8 * fade})`; ctx.lineWidth = 2; ctx.shadowColor = "#bcd4ff"; ctx.shadowBlur = 10; ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.stroke();
       ctx.fillStyle = `rgba(255,255,255,${fade})`;
-      for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, TAU); ctx.fill(); ctx.fillRect(q.x - 9, q.y - .5, 18, 1); ctx.fillRect(q.x - .5, q.y - 9, 1, 18); }
+      for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 4.5, 0, TAU); ctx.fill(); ctx.fillRect(q.x - 14, q.y - 1, 28, 2); ctx.fillRect(q.x - 1, q.y - 14, 2, 28); }
+      ctx.shadowBlur = 0;
     }
     ctx.restore();
 
