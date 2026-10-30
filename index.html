@@ -12,6 +12,8 @@
   #hud { position: fixed; left: 24px; top: 20px; font-size: 13px; line-height: 1.7; white-space: pre; text-shadow: 0 1px 3px #000; pointer-events: none; }
   #hud b { font-size: 20px; letter-spacing: .12em; color: #7ff0e8; }
   #status { position: fixed; right: 24px; top: 20px; letter-spacing: .15em; font-size: 16px; text-shadow: 0 1px 4px #000; pointer-events: none; }
+  #rec { position: fixed; right: 24px; top: 52px; font: 13px ui-monospace, Menlo, monospace; letter-spacing: .1em; color: #dff; background: rgba(5,10,15,.78); border: 1px solid #7ff0e8; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  #rec.on { color: #fff; background: #c0263a; border-color: #ff6a7a; }
 </style>
 </head>
 <body>
@@ -19,6 +21,7 @@
 <video id="video" autoplay playsinline muted></video>
 <div id="hud">loading hand model…</div>
 <div id="status">STARTING</div>
+<button id="rec" title="record a clip (R)">● REC</button>
 
 <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }</script>
 <script type="module">
@@ -267,7 +270,34 @@ const MODELS = {
     return [Math.cos(a) * r * .9, y * .9, Math.sin(a) * r * .9]; }],
   5: ["Heart", () => { const t = R() * TAU, s = Math.sqrt(R());
     return [16 * Math.sin(t) ** 3 / 17 * s, -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) / 17 * s, (R() - .5) * .5 * s]; }],
+  6: ["Your hand", i => MODELS[4][1](i)], // live: rebuilt from the tracked hand every frame (a sphere until a hand shows)
+  7: ["You", i => MODELS[4][1](i)], // live: rebuilt from the person mask every frame
 };
+const N_MODELS = Object.keys(MODELS).length;
+// where each particle sits on the hand: 3 in 4 along a bone, the rest across the palm
+const HAND_SPOT = Array.from({ length: NP }, (_, i) => [i % 4 ? R() : -1, R(), R()]);
+function liveHand(lm) {
+  const c = lm[9], P = q => [-(q.x - c.x) * map.dw, (q.y - c.y) * map.dh, q.z * map.dw]; // mirrored, in screen pixels
+  const k = 1.1 / Math.hypot(...P(lm[0]).slice(0, 2));
+  for (let i = 0; i < NP; i++) {
+    const [u, a, b] = HAND_SPOT[i], t = targets[i];
+    let p;
+    if (u >= 0) { const [m, n] = CONN[u * CONN.length | 0], A = P(lm[m]), B = P(lm[n]); p = A.map((v, j) => v + (B[j] - v) * a); }
+    else { const s = a + b > 1 ? [1 - a, 1 - b] : [a, b], O = P(lm[0]), X = P(lm[5]), Y = P(lm[17]); p = O.map((v, j) => v + (X[j] - v) * s[0] + (Y[j] - v) * s[1]); }
+    for (let j = 0; j < 3; j++) t[j] = p[j] * k + jit[i][j] * .06;
+  }
+}
+const youOn = [];
+function liveYou({ w, h, data }) {
+  youOn.length = 0;
+  for (let i = 0; i < data.length; i++) if (data[i] > .5) youOn.push(i);
+  if (youOn.length < 50) return;
+  const sc = 2.4 / h;
+  for (let i = 0; i < NP; i++) { // particle i takes the pixel at the same rank, so it barely moves as the mask changes
+    const q = youOn[i * youOn.length / NP | 0], t = targets[i];
+    t[0] = -((q % w) - w / 2) * sc; t[1] = ((q / w | 0) - h / 2) * sc; t[2] = jit[i][2] * .25;
+  }
+}
 const cloud = Array.from({ length: NP }, () => [0, 0, 0]);
 const jit = Array.from({ length: NP }, () => [R() - .5, R() - .5, R() - .5]);
 const CALLOUTS = [0, 550, 1100, 1650];
@@ -283,9 +313,11 @@ const particles = {
   draw(now) {
     hands.forEach((h, i) => {
       if (h.pinch < PINCH && !pinchAt[i]) pinchAt[i] = now;
-      else if (h.pinch > .5 && pinchAt[i]) { if (now - pinchAt[i] < TAP_MS) setModel(model % 5 + 1); pinchAt[i] = 0; }
+      else if (h.pinch > .5 && pinchAt[i]) { if (now - pinchAt[i] < TAP_MS) setModel(model % N_MODELS + 1); pinchAt[i] = 0; }
     });
     for (let i = hands.length; i < 2; i++) pinchAt[i] = 0;
+    if (model === 6 && hands.length) liveHand(hands[0].lm);
+    if (model === 7 && segMask) liveYou(segMask);
     const drv = hands[hands.length - 1];
     if (drv) { const p = drv.s[9]; if (lastPalm) { view.vy += (p.x - lastPalm.x) * .0003; view.vx += (p.y - lastPalm.y) * .0003; } lastPalm = p; }
     else lastPalm = null;
@@ -402,6 +434,7 @@ const ST = { shape: 5, cx: W / 2, cy: H / 2, scale: Math.min(W, H) * .25, rot: 0
 const SN = 360, spts =Array.from({ length: SN }, () => [0, 0]);
 // hand-to-hand: the shape rides one palm; pinch with the other hand and it flies over, morphing mid-air
 const PASS_MS = 480, pass = { holder: 0, from: null, start: 0, morphed: false, armed: [true, true], trail: [] };
+const pointing = h => fingerOut(h.lm, 1) && [2, 3, 4].every(k => !fingerOut(h.lm, k));
 const palmOf = h => ({ x: (h.s[0].x + h.s[5].x + h.s[9].x + h.s[17].x) / 4, y: (h.s[0].y + h.s[5].y + h.s[9].y + h.s[17].y) / 4 });
 const shapes = {
   name: "Shapes",
@@ -473,14 +506,19 @@ const TIPS = [4, 8, 12, 16, 20], PALM = [0, 1, 5, 9, 13, 17, 0];
 let theme = 0;
 const themeDwell = THEMES.map(() => 0), webTrail = [];
 const stars = Array.from({ length: 140 }, () => ({ x: R(), y: R(), r: .5 + R() * 1.5, p: R() * TAU }));
-function glowLine(a, b, color, w) {
+function glowLine(a, b, color, w, bend = 0) { // bend: sideways offset of the middle, for a vibrating string
+  const l = d(a, b) || 1, mx = (a.x + b.x) / 2 - (b.y - a.y) / l * bend, my = (a.y + b.y) / 2 + (b.x - a.x) / l * bend;
+  const path = () => { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(mx, my, b.x, b.y); ctx.stroke(); };
   ctx.strokeStyle = color;
-  for (const [lw, al] of [[w * 3, .18], [w, .9]]) { ctx.globalAlpha = al; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-  ctx.globalAlpha = .9; ctx.strokeStyle = "#fff"; ctx.lineWidth = w * .3; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  for (const [lw, al] of [[w * 3, .18], [w, .9]]) { ctx.globalAlpha = al; ctx.lineWidth = lw; path(); }
+  ctx.globalAlpha = .9; ctx.strokeStyle = "#fff"; ctx.lineWidth = w * .3; path();
 }
+// a finger is out when its tip is further from the wrist than its middle joint (thumb: measured from the little-finger base)
+const fingerOut = (lm, k) => k ? d(lm[TIPS[k]], lm[0]) > d(lm[TIPS[k] - 2], lm[0]) : d(lm[4], lm[17]) > d(lm[3], lm[17]);
+const strum = { out: [[], []], amp: [0, 0, 0, 0, 0] };
 const strings = {
   name: "Strings", hidesHands: true,
-  get help() { return `raise both hands — your fingertips get strung together with light\nmove, spread and tilt your hands to weave the web\ntheme: ${THEMES[theme].name} (hover a theme or press T)`; },
+  get help() { return `raise both hands — your fingertips get strung together with light\nmove, spread and tilt your hands to weave the web\ncurl a finger to pluck its string: longer strings play lower${audio ? "" : " (click once for sound)"}\ntheme: ${THEMES[theme].name} (hover a theme or press T)`; },
   draw(now, dt) {
     const T = THEMES[theme];
     ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round"; ctx.lineJoin = "round";
@@ -503,9 +541,20 @@ const strings = {
       ctx.globalAlpha = .2; ctx.strokeStyle = "#fff"; ctx.beginPath(); // joint-to-matching-joint fabric
       for (let i = 0; i < 21; i++) { ctx.moveTo(A.s[i].x, A.s[i].y); ctx.lineTo(B.s[i].x, B.s[i].y); }
       ctx.stroke();
-      TIPS.forEach((i, k) => glowLine(A.s[i], B.s[i], T.bars[k], 5)); // neon bars between matching fingertips
+      [A, B].forEach((h, side) => TIPS.forEach((_, k) => { // pluck when a finger curls in after being out
+        const out = fingerOut(h.lm, k);
+        if (!out && strum.out[side][k]) {
+          strum.amp[k] = 1;
+          pluck(SCALE[clamp(Math.round((1 - d(A.s[TIPS[k]], B.s[TIPS[k]]) / (W * .7)) * (SCALE.length - 1)), 0, SCALE.length - 1)]);
+        }
+        strum.out[side][k] = out;
+      }));
+      TIPS.forEach((i, k) => { // neon bars between matching fingertips, wobbling after a pluck
+        strum.amp[k] *= Math.exp(-dt / 350);
+        glowLine(A.s[i], B.s[i], T.bars[k], 5 + strum.amp[k] * 4, strum.amp[k] * 28 * Math.sin(now / 16));
+      });
     } else {
-      webTrail.length = 0;
+      webTrail.length = 0; strum.out = [[], []];
       for (const h of hands) { ctx.globalAlpha = .5; ctx.strokeStyle = T.bars[1]; ctx.lineWidth = 1; ctx.beginPath(); TIPS.forEach((i, k) => k ? ctx.lineTo(h.s[i].x, h.s[i].y) : ctx.moveTo(h.s[i].x, h.s[i].y)); ctx.closePath(); ctx.stroke(); }
     }
 
@@ -546,9 +595,9 @@ function bands(bins, out) {
   }
   return out;
 }
-const waveDwell = WAVES.map(() => 0), sy = { yaw: 0, pitch: .3, r: 0, note: -1, cut: 0, gain: 1 };
+const waveDwell = WAVES.map(() => 0), sy = { yaw: 0, pitch: .3, r: 0, note: -1, cut: 0, gain: 1, chord: 0, cn: -1, cc: 0, live: null };
 // drum machine: 16-step patterns at 110 BPM, scheduled ahead on the audio clock so it never drifts
-const BEATS = ["No beat", "Four", "Hip-hop", "Breaks"], beatDwell = BEATS.map(() => 0), BPM = 110, STEP = 60 / BPM / 4;
+const BEATS = ["No beat", "Four", "Hip-hop", "Breaks"], beatDwell = [...BEATS, 0].map(() => 0), BPM = 110, STEP = 60 / BPM / 4;
 const PATTERNS = { // k kick, s snare, h hat
   "Four": { k: "x...x...x...x...", s: "....x.......x...", h: "..x...x...x...x." },
   "Hip-hop": { k: "x......x..x.....", s: "....x.......x...", h: "x.x.x.x.x.x.x.x." },
@@ -569,12 +618,55 @@ function drum(kind, t) {
   }
 }
 function scheduleBeat() {
-  if (!audio || !beat || audio.muted) return;
+  if (!audio || audio.muted || (!beat && !loop.state)) return;
   const p = PATTERNS[BEATS[beat]], now = audio.ctx.currentTime;
   if (audio.next < now) { audio.next = now + .05; audio.step = 0; audio.beatStart = audio.next; }
   while (audio.next < now + .12) { // look ahead ~2 frames; the audio clock places each hit exactly
-    for (const k of "ksh") if (p[k][audio.step % 16] === "x") drum(k, audio.next);
+    if (p) for (const k of "ksh") if (p[k][audio.step % 16] === "x") drum(k, audio.next);
+    tickLoop(audio.step, audio.next);
     audio.step++; audio.next += STEP;
+  }
+}
+// chords from the right hand's finger count (5 / fist = single note); intervals in semitones above the played note
+const CHORDS = [["Single", []], ["Power", [7, 12]], ["Major", [4, 7]], ["Minor", [3, 7]], ["Seventh", [4, 7, 10]], ["Single", []]];
+// looper: records 2 bars of what you play, on the drum grid, then plays it back under you
+const LOOP_STEPS = 32, loop = { state: 0, steps: [], ev: [], at: 0, pickT: 0 }; // state: 0 off, 1 waiting for the bar, 2 recording, 3 playing
+const LOOP_LABEL = () => ["● Rec loop", "loop: wait…", `rec ${loop.steps.length}/${LOOP_STEPS}`, "■ Clear loop"][loop.state];
+// recorded steps → notes with lengths: equal neighbouring steps merge into one held note
+const runs = steps => steps.reduce((ev, n, k) => {
+  const e = ev[ev.length - 1];
+  if (n && e && e.k + e.n === k && e.key === n.join()) e.n++; else if (n) ev.push({ k, n: 1, notes: n, key: n.join() });
+  return ev;
+}, []);
+console.assert(runs([[60], [60], null, [62], [62, 66]]).map(e => e.k + ":" + e.n).join() === "0:2,3:1,4:1", "runs self-check failed");
+function toggleLoop(force) {
+  if (!audio || (!force && performance.now() - loop.pickT < 2000)) return; // the dwell keeps firing while you hover, so ignore repeats
+  loop.pickT = performance.now(); loop.state = loop.state ? 0 : 1; loop.steps = [];
+}
+function tickLoop(step, t) {
+  if (loop.state === 1 && step % 16 === 0) loop.state = 2;
+  if (loop.state === 2) {
+    loop.steps.push(sy.live);
+    if (loop.steps.length === LOOP_STEPS) { loop.ev = runs(loop.steps); loop.state = 3; loop.at = step + 1; }
+  } else if (loop.state === 3) {
+    const k = ((step - loop.at) % LOOP_STEPS + LOOP_STEPS) % LOOP_STEPS;
+    for (const e of loop.ev) if (e.k === k) loopVoice(e.notes, t, e.n * STEP);
+  }
+}
+function loopVoice(notes, t, len) {
+  const ac = audio.ctx, g = ac.createGain(), f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 1800;
+  f.connect(g).connect(audio.beatBus);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.3 / Math.sqrt(notes.length), t + .01); g.gain.setTargetAtTime(0, t + Math.max(.02, len - .05), .04);
+  for (const n of notes) { const o = ac.createOscillator(); o.type = WAVES[wave]; o.frequency.value = 440 * 2 ** ((n - 69) / 12); o.connect(f); o.start(t); o.stop(t + len + .3); }
+}
+// a plucked-string voice (Strings mode, Keep-up hits)
+function pluck(midi, vol = .5) {
+  if (!audio || audio.muted) return;
+  const ac = audio.ctx, t = ac.currentTime, f0 = 440 * 2 ** ((midi - 69) / 12), g = ac.createGain(), lp = ac.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.setValueAtTime(f0 * 8, t); lp.frequency.exponentialRampToValueAtTime(f0 * 1.5, t + .6);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + 1.6); lp.connect(g).connect(audio.beatBus);
+  for (const [type, m, det] of [["triangle", 1, 0], ["sawtooth", 1, 6], ["sine", 2, 0]]) {
+    const o = ac.createOscillator(); o.type = type; o.frequency.value = f0 * m; o.detune.value = det; o.connect(lp); o.start(t); o.stop(t + 1.7);
   }
 }
 let audio = null;
@@ -590,15 +682,16 @@ function startAudio() {
   const an = ac.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = .8;
   o1.connect(filter); o2.connect(filter); sub.connect(subG).connect(filter);
   filter.connect(amp).connect(out); amp.connect(delay).connect(fb).connect(delay); delay.connect(wet).connect(out);
+  const chord = [0, 1, 2].map(() => { const o = mk(WAVES[wave], 0), g = ac.createGain(); g.gain.value = 0; o.connect(g).connect(filter); return { o, g }; }); // extra chord voices
   const beatBus = ac.createGain(); beatBus.gain.value = .5; beatBus.connect(out); // drums go through the analyser too, so the visuals hit on the beat
   const noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate), nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
   out.connect(an).connect(ac.destination);
-  audio = { ctx: ac, o: [o1, o2, sub], filter, amp, fb, wet, an, bins: new Uint8Array(an.frequencyBinCount), wave: new Uint8Array(an.fftSize), beatBus, noise, next: 0, step: 0, beatStart: 0 };
+  audio = { ctx: ac, o: [o1, o2, sub], filter, amp, fb, wet, an, chord, bins: new Uint8Array(an.frequencyBinCount), wave: new Uint8Array(an.fftSize), beatBus, noise, next: 0, step: 0, beatStart: 0 };
 }
-stage.addEventListener("click", () => MODES[mode] === synth && startAudio());
+stage.addEventListener("click", () => [synth, strings, keepup].includes(MODES[mode]) && startAudio());
 const synth = {
   name: "Synth", hidesHands: true, noSparks: true,
-  get help() { return audio ? `LEFT hand height → note · open hand plays, fist mutes\nRIGHT hand height → filter brightness · left/right → echo · pinch → wobble\nspread both hands → visual size · V visual · B beat · M mutes` : "click anywhere (or press M) to turn the sound on"; },
+  get help() { return audio ? `LEFT hand height → note · open hand plays, fist mutes\nRIGHT hand height → filter brightness · left/right → echo · pinch → wobble\nRIGHT fingers → chord: 1 power · 2 major · 3 minor · 4 seventh · open = single\nRec loop (or L) records 2 bars over the beat, then plays them back\nspread both hands → visual size · V visual · B beat · M mutes` : "click anywhere (or press M) to turn the sound on"; },
   leave() { audio?.amp.gain.setTargetAtTime(0, audio.ctx.currentTime, .05); },
   draw(now, dt) {
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
@@ -609,12 +702,19 @@ const synth = {
     let level = 0;
     if (audio) {
       const t = audio.ctx.currentTime, playing = left && left.fingers > 0 && !audio.muted;
+      if (right && right.pinch > .5) { // finger count must hold for 8 frames; ignored mid-pinch, which bends the count
+        const n = right.fingers; sy.cc = n === sy.cn ? sy.cc + 1 : 0; sy.cn = n; if (sy.cc === 8) sy.chord = n;
+      }
+      const iv = CHORDS[sy.chord][1];
       if (left) {
         const idx = clamp(Math.floor((1 - left.s[8].y / H) * SCALE.length), 0, SCALE.length - 1);
         sy.note = SCALE[idx];
         const f = 440 * 2 ** ((sy.note - 69) / 12);
         audio.o.forEach(o => o.frequency.setTargetAtTime(f, t, .03));
+        audio.chord.forEach((v, k) => v.o.frequency.setTargetAtTime(f * 2 ** ((iv[k] || 0) / 12), t, .03));
       }
+      audio.chord.forEach((v, k) => { v.g.gain.setTargetAtTime(k < iv.length ? .5 : 0, t, .04); v.o.type = WAVES[wave]; });
+      sy.live = playing ? [sy.note, ...iv.map(i => sy.note + i)] : null;
       audio.amp.gain.setTargetAtTime(playing ? .12 + .05 * left.fingers / 5 : 0, t, .04);
       if (right) {
         sy.cut = 150 * 2 ** ((1 - right.s[8].y / H) * 6.5);
@@ -712,7 +812,7 @@ const synth = {
       ctx.fillStyle = on ? `hsl(${hue}, 90%, 60%)` : "rgba(255,255,255,.08)"; ctx.fillRect(W - (on ? 70 : 40), yy - H / SCALE.length / 2 + 1, on ? 70 : 40, H / SCALE.length - 2);
       ctx.fillStyle = on ? "#000" : "rgba(255,255,255,.4)"; ctx.fillText(NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1), W - 32, yy);
     });
-    if (audio) { ctx.fillStyle = "#7ff0e8"; ctx.fillText(`filter ${Math.round(sy.cut)} Hz${audio.muted ? " · MUTED" : ""}`, W / 2 - 60, cy0 + sy.r * 1.5 + 20); }
+    if (audio) { ctx.fillStyle = "#7ff0e8"; ctx.fillText(`chord ${CHORDS[sy.chord][0]} · filter ${Math.round(sy.cut)} Hz${audio.muted ? " · MUTED" : ""}`, W / 2 - 110, cy0 + sy.r * 1.5 + 20); }
     ctx.restore();
 
     // ---- small live camera panel with fingertip rings ----
@@ -737,11 +837,11 @@ const synth = {
       }
     }
     ctx.restore();
-    if (audio && beat) { // step lights: which of the 16 steps is playing now
+    if (audio && (beat || loop.state)) { // step lights: which of the 16 steps is playing now (red while the looper records)
       const st = Math.floor((audio.ctx.currentTime - audio.beatStart) / STEP) % 16, x0 = W / 2 - 16 * 11;
-      for (let i = 0; i < 16; i++) { ctx.fillStyle = i === st ? "#f5c542" : i % 4 ? "rgba(255,255,255,.15)" : "rgba(255,255,255,.35)"; ctx.fillRect(x0 + i * 22, H - 238, 16, 6); }
+      for (let i = 0; i < 16; i++) { ctx.fillStyle = i === st ? (loop.state === 2 ? "#ff4a6a" : "#f5c542") : i % 4 ? "rgba(255,255,255,.15)" : "rgba(255,255,255,.35)"; ctx.fillRect(x0 + i * 22, H - 238, 16, 6); }
     }
-    chipRow(BEATS, beat, H - 214, beatDwell, dt, i => { beat = i; if (audio) audio.next = 0; });
+    chipRow([...BEATS, LOOP_LABEL()], beat, H - 214, beatDwell, dt, i => { if (i === BEATS.length) return toggleLoop(); beat = i; if (audio) audio.next = 0; });
     chipRow(VISUALS, vis, H - 162, visDwell, dt, i => vis = i);
     chipRow(["Saw", "Square", "Triangle", "Sine"], wave, H - 110, waveDwell, dt, i => wave = i);
   },
@@ -752,8 +852,9 @@ const SKY_COLS = ["#ffffff", "#bcd4ff", "#9fb6ff", "#e6c8ff"];
 const sky = {
   name: "Sky", hidesHands: true,
   a: 0, vel: .0003, dir: 1, wheel: null, last: null, w: 0, h: 0, stars: [],
+  tip: [], meteors: [], flickT: 0, cons: [], cur: null, pointT: 0,
   neb: document.createElement("canvas"), trail: document.createElement("canvas"), me: document.createElement("canvas"), mask: document.createElement("canvas"),
-  get help() { return `raise both arms → the sky starts turning\nturn your hands like a wheel to spin it (or sweep one hand)\nstand back so your upper body is in view — you stay in front of the stars`; },
+  get help() { return `raise both arms → the sky starts turning\nturn your hands like a wheel to spin it (or sweep one hand)\nflick a finger → shooting star · point and move → draw a constellation\nstand back so your upper body is in view — you stay in front of the stars`; },
   setup() { // nebula backdrop + star field, rebuilt when the window size changes
     this.w = W; this.h = H;
     for (const c of [this.neb, this.trail, this.me]) { c.width = W; c.height = H; }
@@ -778,7 +879,7 @@ const sky = {
       const lift = clamp((H * .5 - (a.y + b.y) / 2) / (H * .35), 0, 1); // arms raised high → the heavens turn on their own
       push += lift * .0007 * this.dir;
     } else this.wheel = null;
-    if (hands.length === 1) { const c = palmOf(hands[0]); if (this.last) push += (c.x - this.last.x) / W * .9; this.last = c; } else this.last = null;
+    if (hands.length === 1 && !pointing(hands[0])) { const c = palmOf(hands[0]); if (this.last) push += (c.x - this.last.x) / W * .9; this.last = c; } else this.last = null;
     this.vel = this.vel * .94 + push * .35 + .0003 * this.dir * .06; // momentum, settling to a slow idle drift
     if (Math.abs(push) > .0005) this.dir = Math.sign(push);
     const a0 = this.a, a1 = this.a + this.vel; this.a = a1;
@@ -802,6 +903,42 @@ const sky = {
     tg.globalAlpha = 1;
     ctx.drawImage(this.neb, 0, 0, W, H);
     ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.drawImage(this.trail, 0, 0, W, H); ctx.restore();
+
+    // ---- shooting stars: a fast fingertip flick launches one along the flick ----
+    hands.forEach((h, k) => {
+      const p = h.s[8], q = this.tip[k];
+      if (q) { const vx = (p.x - q.x) / dt, vy = (p.y - q.y) / dt; if (Math.hypot(vx, vy) > 1.4 && now - this.flickT > 250) { this.flickT = now; this.meteors.push({ x: p.x, y: p.y, vx: vx * 1.2, vy: vy * 1.2, life: 1 }); } }
+      this.tip[k] = { x: p.x, y: p.y };
+    });
+    this.tip.length = hands.length;
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+    this.meteors = this.meteors.filter(m => (m.life -= dt / 900) > 0);
+    for (const m of this.meteors) {
+      m.x += m.vx * dt; m.y += m.vy * dt;
+      const tx = m.x - m.vx * 140, ty = m.y - m.vy * 140, g = ctx.createLinearGradient(tx, ty, m.x, m.y);
+      g.addColorStop(0, "rgba(180,200,255,0)"); g.addColorStop(1, `rgba(255,255,255,${m.life})`);
+      ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(m.x, m.y); ctx.stroke();
+      ctx.fillStyle = `rgba(255,255,255,${m.life})`; ctx.beginPath(); ctx.arc(m.x, m.y, 3.5, 0, TAU); ctx.fill();
+    }
+    // ---- constellations: point (index out, others curled) and move; the stars you place turn with the sky ----
+    const ptr = hands.find(pointing);
+    if (ptr) {
+      const p = ptr.s[8], at = { r: d(p, P), p: Math.atan2(p.y - P.y, p.x - P.x) - this.a };
+      if (!this.cur) { this.cur = { nodes: [], born: now }; this.cons.push(this.cur); if (this.cons.length > 6) this.cons.shift(); }
+      const lastN = this.cur.nodes[this.cur.nodes.length - 1], pos = n => ({ x: P.x + Math.cos(n.p + this.a) * n.r, y: P.y + Math.sin(n.p + this.a) * n.r });
+      if (!lastN || d(pos(lastN), p) > 70) this.cur.nodes.push(at);
+      this.cur.born = now; this.pointT = now;
+      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 26); g.addColorStop(0, "rgba(255,240,200,.9)"); g.addColorStop(1, "rgba(255,240,200,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, 26, 0, TAU); ctx.fill();
+    } else if (now - this.pointT > 600) this.cur = null;
+    this.cons = this.cons.filter(c => now - c.born < 25000);
+    for (const c of this.cons) {
+      const fade = clamp((25000 - (now - c.born)) / 4000, 0, 1), pts = c.nodes.map(n => ({ x: P.x + Math.cos(n.p + this.a) * n.r, y: P.y + Math.sin(n.p + this.a) * n.r }));
+      ctx.strokeStyle = `rgba(190,210,255,${.55 * fade})`; ctx.lineWidth = 1.2; ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.stroke();
+      ctx.fillStyle = `rgba(255,255,255,${fade})`;
+      for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, TAU); ctx.fill(); ctx.fillRect(q.x - 9, q.y - .5, 18, 1); ctx.fillRect(q.x - .5, q.y - 9, 1, 18); }
+    }
+    ctx.restore();
 
     // ---- moonlit dunes + haze on the horizon ----
     const hz = ctx.createLinearGradient(0, H * .55, 0, H * .85); hz.addColorStop(0, "rgba(140,130,200,0)"); hz.addColorStop(1, "rgba(170,160,220,.35)");
@@ -836,6 +973,72 @@ const sky = {
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, TAU); ctx.fill();
     }
     ctx.restore();
+  },
+};
+
+// ---- keep-up: bounce glowing balls off your palms and don't let them drop ----
+const ku = { balls: [], prev: [], score: 0, best: 0, lost: 0, flash: [] };
+try { ku.best = +localStorage.getItem("airmesh-keepup-best") || 0; } catch {}
+const kuSpawn = () => ku.balls.push({ x: W * (.3 + R() * .4), y: H * .12, vx: (R() - .5) * .2, vy: 0, hitT: 0, hue: R() * 360, trail: [] });
+const keepup = {
+  name: "Keep-up",
+  get help() { return `bounce the ball off your palms — don't let it drop\nswing up into it for a bigger hit · every 10 hits adds a ball\nbest streak: ${ku.best}${audio ? "" : " · click once for sound"}`; },
+  draw(now, dt) {
+    dt = Math.min(dt, 40); // a stalled frame shouldn't teleport the ball through your hand
+    const g = H * 1.4e-6, br = Math.max(22, Math.min(W, H) * .035), lift = -Math.sqrt(2 * g * H * .45);
+    const pads = hands.map((h, k) => {
+      const c = palmOf(h), q = ku.prev[k]; ku.prev[k] = c;
+      return { c, r: d(h.s[0], h.s[9]) * .85, v: q ? { x: (c.x - q.x) / dt, y: (c.y - q.y) / dt } : { x: 0, y: 0 } };
+    });
+    ku.prev.length = hands.length;
+    if (!ku.balls.length && now - ku.lost > 1000) kuSpawn();
+    const waiting = !hands.length && ku.score === 0; // hold the ball up top until someone plays
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (const b of ku.balls) {
+      if (waiting) { b.y = H * .12 + Math.sin(now / 400) * 8; b.vx = b.vy = 0; }
+      else {
+        b.vy += g * dt; b.x += b.vx * dt; b.y += b.vy * dt;
+        if (b.x < br) { b.x = br; b.vx = Math.abs(b.vx) * .9; } else if (b.x > W - br) { b.x = W - br; b.vx = -Math.abs(b.vx) * .9; }
+        if (b.y < br) { b.y = br; b.vy = Math.abs(b.vy) * .5; }
+      }
+      for (const p of pads) {
+        const dx = b.x - p.c.x, dy = b.y - p.c.y, dist = Math.hypot(dx, dy), min = p.r + br;
+        if (dist > min || !dist) continue;
+        const nx = dx / dist, ny = dy / dist, rv = (b.vx - p.v.x) * nx + (b.vy - p.v.y) * ny;
+        b.x = p.c.x + nx * min; b.y = p.c.y + ny * min;
+        if (rv >= 0) continue;
+        b.vx -= 1.8 * rv * nx; b.vy -= 1.8 * rv * ny; // bounce off the moving hand (restitution .8)
+        if (ny < 0) b.vy = Math.min(b.vy, lift); // a hit from below always pops it back up into play
+        const sp = Math.hypot(b.vx, b.vy); if (sp > 2.6) { b.vx *= 2.6 / sp; b.vy *= 2.6 / sp; }
+        if (now - b.hitT > 200) {
+          b.hitT = now; ku.score++; b.hue = (b.hue + 40) % 360; ku.flash.push({ x: b.x, y: b.y, life: 1 });
+          pluck(SCALE[ku.score % SCALE.length], .35);
+          for (let i = 0; i < 24; i++) { const a = R() * TAU, v = 2 + R() * 5; sparks.push({ x: b.x, y: b.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, hue: (b.hue + R() * 60) % 360 }); }
+          if (ku.score % 10 === 0 && ku.balls.length < 3) kuSpawn();
+          if (ku.score > ku.best) { ku.best = ku.score; try { localStorage.setItem("airmesh-keepup-best", ku.best); } catch {} }
+        }
+      }
+      b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 14) b.trail.shift();
+      b.trail.forEach((q, i) => { ctx.fillStyle = `hsla(${b.hue}, 100%, 60%, ${i / b.trail.length * .25})`; ctx.beginPath(); ctx.arc(q.x, q.y, br * i / b.trail.length, 0, TAU); ctx.fill(); });
+      const o = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, br * 2.2);
+      o.addColorStop(0, "#fff"); o.addColorStop(.3, `hsl(${b.hue}, 100%, 65%)`); o.addColorStop(1, `hsla(${b.hue}, 100%, 50%, 0)`);
+      ctx.fillStyle = o; ctx.beginPath(); ctx.arc(b.x, b.y, br * 2.2, 0, TAU); ctx.fill();
+    }
+    const before = ku.balls.length;
+    ku.balls = ku.balls.filter(b => b.y < H + br * 2);
+    if (before && !ku.balls.length) { ku.lost = now; ku.last = ku.score; ku.score = 0; }
+    for (const p of pads) { // palm paddles
+      ctx.strokeStyle = "rgba(127,240,232,.8)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.c.x, p.c.y, p.r, 0, TAU); ctx.stroke();
+    }
+    ku.flash = ku.flash.filter(f => (f.life -= dt / 400) > 0);
+    for (const f of ku.flash) { ctx.strokeStyle = `rgba(255,255,255,${f.life})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(f.x, f.y, br * (3 - 2 * f.life), 0, TAU); ctx.stroke(); }
+    ctx.restore();
+    ctx.save(); ctx.textAlign = "center"; ctx.fillStyle = "#fff"; ctx.shadowColor = "#7ff0e8"; ctx.shadowBlur = 20;
+    ctx.font = "bold 72px ui-monospace, Menlo, monospace"; ctx.fillText(ku.score, W / 2, 110);
+    ctx.shadowBlur = 0; ctx.font = FONT; ctx.fillStyle = "#7ff0e8"; ctx.fillText(`BEST ${ku.best}`, W / 2, 138);
+    ctx.restore();
+    if (waiting) tag("raise a hand to start", W / 2 - 90, H * .5);
+    else if (now - ku.lost < 1500 && ku.last) tag(`dropped it! streak ${ku.last}`, W / 2 - 90, H * .5, "#ff6a7a");
   },
 };
 
@@ -1387,7 +1590,7 @@ const xray = {
 };
 
 // ---- modes, bottom bar, keys ----
-const MODES = [portal, particles, paint, shapes, strings, synth, sky, xray];
+const MODES = [portal, particles, paint, shapes, strings, synth, sky, xray, keepup];
 let mode = 0;
 const dwell = MODES.map(() => 0);
 const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
@@ -1398,6 +1601,8 @@ addEventListener("keydown", e => {
   if (e.key === "m" && MODES[mode] === synth) { if (!audio) startAudio(); else audio.muted = !audio.muted; }
   if (e.key === "v" && MODES[mode] === synth) vis = (vis + 1) % VISUALS.length;
   if (e.key === "b" && MODES[mode] === synth) { beat = (beat + 1) % BEATS.length; if (audio) audio.next = 0; }
+  if (e.key === "r") toggleRec();
+  if (e.key === "l" && MODES[mode] === synth) toggleLoop(true);
   if (e.key === "t") theme = (theme + 1) % THEMES.length;
   if (e.key === "c") strokes = [];
   if (e.key === "x") xr.explodeKey = !xr.explodeKey;
@@ -1470,7 +1675,7 @@ async function pump() {
   busy = true; lastVideoTime = video.currentTime;
   try {
     const bitmap = await createImageBitmap(video);
-    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: (MODES[mode] === portal && needsSeg()) || MODES[mode] === sky }, [bitmap]);
+    tracker.postMessage({ type: "frame", bitmap, t: performance.now(), wantSeg: (MODES[mode] === portal && needsSeg()) || MODES[mode] === sky || (MODES[mode] === particles && model === 7) }, [bitmap]);
   } catch { busy = false; }
 }
 // glide on-screen points toward the latest detection, so motion is smooth at display rate between ~30 Hz results
@@ -1479,6 +1684,30 @@ function easeHands(dt) {
   const k = 1 - Math.exp(-dt / 35);
   hands = target.map((h, i) => ({ ...h, s: h.s.map((p, j) => { const q = hands[i].s[j]; return { x: q.x + (p.x - q.x) * k, y: q.y + (p.y - q.y) * k }; }) }));
 }
+
+// ---- clip recording: what's on the stage (+ the sound, if it's on) → a video download ----
+let recording = null;
+const recBtn = $("rec");
+function toggleRec() {
+  if (recording) return recording.r.stop();
+  const stream = stage.captureStream(30);
+  // shortcut: sound is only captured if it was already on when recording started; re-record after turning it on
+  const dest = audio?.ctx.createMediaStreamDestination();
+  if (dest) { audio.an.connect(dest); stream.addTrack(dest.stream.getAudioTracks()[0]); }
+  const type = ["video/webm;codecs=vp9,opus", "video/webm", "video/mp4"].find(t => MediaRecorder.isTypeSupported(t));
+  const r = new MediaRecorder(stream, type ? { mimeType: type } : {}), chunks = [];
+  r.ondataavailable = e => e.data.size && chunks.push(e.data);
+  r.onstop = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(chunks, { type: r.mimeType }));
+    a.download = `airmesh-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.${r.mimeType.includes("mp4") ? "mp4" : "webm"}`;
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1e4);
+    stream.getTracks().forEach(t => t.stop()); if (dest) audio.an.disconnect(dest);
+    recording = null; recBtn.classList.remove("on"); recBtn.textContent = "● REC";
+  };
+  r.start(1000); recording = { r, t0: performance.now() }; recBtn.classList.add("on");
+}
+recBtn.addEventListener("click", toggleRec);
 
 let last = performance.now(), hudHtml = "";
 function frame(now) {
@@ -1494,6 +1723,7 @@ function frame(now) {
   modeBar(dt);
   const html = `${startError}<b>${MODES[mode].name.toUpperCase()}</b>\n${MODES[mode].help}\n\nhover a fingertip on a mode below to switch · keys 1–${MODES.length}`;
   if (html !== hudHtml) hud.innerHTML = hudHtml = html; // only touch the DOM when the text changes
+  if (recording) { const s = (now - recording.t0) / 1000 | 0, txt = `■ STOP ${s / 60 | 0}:${String(s % 60).padStart(2, "0")}`; if (recBtn.textContent !== txt) recBtn.textContent = txt; }
   requestAnimationFrame(frame);
 }
 init();

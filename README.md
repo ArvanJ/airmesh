@@ -34,18 +34,21 @@ There is nothing to install. Open the link, allow the camera, and raise your han
 
 ## Modes
 
-Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, by clicking, or with keys **1–8**.
+Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, by clicking, or with keys **1–9**.
+
+**Record a clip** in any mode with the **● REC** button in the top-right corner (or press **R**). Press it again to stop, and the video downloads. If the sound is on when you start, it's recorded too.
 
 | # | Mode | What your hands do |
 |---|------|--------------------|
 | 1 | **Portal** | Make an "L" with your thumb and index finger on **both** hands. The space between them becomes a live camera filter. **Tap thumb + index together** to switch to the next filter (or press **E**). |
-| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere or heart. Move your right hand to spin it, spread both hands to zoom, and pinch and hold to explode it. |
+| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere, heart, **Your hand** (the particles copy your hand live, in 3D) or **You** (your whole silhouette, from person segmentation). Move your right hand to spin it, spread both hands to zoom, and pinch and hold to explode it. |
 | 3 | **Air Paint** | Pinch thumb and index to draw glowing strokes. Hold a fist to clear (or press **C**). **K** turns on a kaleidoscope. |
 | 4 | **Shapes** | A glowing shape rides your palm. **Pass it hand to hand:** pinch with your empty hand and it flies over in an arc, morphing into the next shape and colour mid-air, then bursts into sparks when you catch it. With one hand, 1–5 fingers pick the shape and a pinch sets the brightness. |
-| 5 | **Strings** | Your fingertips are strung together with neon light. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). |
-| 6 | **Synth** | Your left hand's height plays notes on a pentatonic scale. An open hand plays and a fist mutes. Your right hand controls the filter, echo and vibrato (pinch). Five live visualizers read the real audio: **Spectrum**, **Ring**, **Scope**, **Orbit** (an X/Y phase scope, so a sine draws a circle and a square draws a square) and **Sphere** (press **V**). Add a **drum machine** to play over: Four, Hip-hop or Breaks at 110 BPM (press **B**). Click once (or press **M**) to turn on audio. |
-| 7 | **Sky** | Move the heavens. Raise both arms and a long-exposure star-trail sky starts turning; turn your hands like a steering wheel to spin it faster (or sweep one hand). Person segmentation keeps *you* in front of the stars, standing on moonlit dunes. |
+| 5 | **Strings** | Your fingertips are strung together with neon light. **Curl a finger to pluck its string.** Longer strings play lower notes, and the string wobbles. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). Click once to turn on sound. |
+| 6 | **Synth** | Your left hand's height plays notes on a pentatonic scale. An open hand plays and a fist mutes. Your right hand controls the filter, echo and vibrato (pinch). **Chords:** hold up 1–4 right-hand fingers for power, major, minor or seventh chords; an open hand plays single notes. Five live visualizers read the real audio: **Spectrum**, **Ring**, **Scope**, **Orbit** (an X/Y phase scope, so a sine draws a circle and a square draws a square) and **Sphere** (press **V**). Add a **drum machine** to play over: Four, Hip-hop or Breaks at 110 BPM (press **B**). **Rec loop** (or **L**) records 2 bars of what you play in time with the beat, then loops it under you while you jam. Click once (or press **M**) to turn on audio. |
+| 7 | **Sky** | Move the heavens. Raise both arms and a long-exposure star-trail sky starts turning; turn your hands like a steering wheel to spin it faster (or sweep one hand). **Flick a finger** to launch a shooting star. **Point** (index out, other fingers curled) and move to draw a constellation, which then turns with the sky. Person segmentation keeps *you* in front of the stars, standing on moonlit dunes. |
 | 8 | **X-Ray** | A holographic 3D workshop. One open hand rotates the model, a pinch zooms and spreading both hands explodes it into parts. Point at a part to see what it does. Pick a car or machine from the dropdown in the bottom-right. |
+| 9 | **Keep-up** | A mini game. Bounce glowing balls off your palms and don't let them drop. Swing up into a ball for a bigger hit. Every 10 hits adds another ball, and your best streak is saved. |
 
 ### Portal filters
 Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Predator** · **Echo**
