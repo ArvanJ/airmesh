@@ -914,14 +914,6 @@ const sky = {
     });
     this.tip.length = hands.length;
     ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
-    this.meteors = this.meteors.filter(m => (m.life -= dt / 900) > 0);
-    for (const m of this.meteors) {
-      m.x += m.vx * dt; m.y += m.vy * dt;
-      const tx = m.x - m.vx * 260, ty = m.y - m.vy * 260, g = ctx.createLinearGradient(tx, ty, m.x, m.y);
-      g.addColorStop(0, "rgba(180,200,255,0)"); g.addColorStop(1, `rgba(255,255,255,${m.life})`);
-      ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(m.x, m.y); ctx.stroke();
-      ctx.fillStyle = `rgba(255,255,255,${m.life})`; ctx.beginPath(); ctx.arc(m.x, m.y, 3.5, 0, TAU); ctx.fill();
-    }
     // ---- constellations: point (index out, others curled) and move; the stars you place turn with the sky ----
     const ptr = hands.find(pointing);
     if (ptr) {
@@ -970,6 +962,15 @@ const sky = {
     // ---- palms glow with the force you're putting into the sky ----
     const force = clamp(Math.abs(this.vel) * 300, .15, 1);
     ctx.save(); ctx.globalCompositeOperation = "lighter";
+    // shooting stars fly in front of you: they leave from your fingertip, which is part of the person cutout
+    this.meteors = this.meteors.filter(m => (m.life -= dt / 900) > 0);
+    for (const m of this.meteors) {
+      m.x += m.vx * dt; m.y += m.vy * dt;
+      const tx = m.x - m.vx * 260, ty = m.y - m.vy * 260, g = ctx.createLinearGradient(tx, ty, m.x, m.y);
+      g.addColorStop(0, "rgba(180,200,255,0)"); g.addColorStop(1, `rgba(255,255,255,${m.life})`);
+      ctx.strokeStyle = g; ctx.lineCap = "round"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(m.x, m.y); ctx.stroke();
+      ctx.fillStyle = `rgba(255,255,255,${m.life})`; ctx.beginPath(); ctx.arc(m.x, m.y, 3.5, 0, TAU); ctx.fill();
+    }
     for (const h of hands) {
       const c = palmOf(h), r = d(h.s[0], h.s[9]) * 1.6, g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, r);
       g.addColorStop(0, `rgba(200,220,255,${.5 * force})`); g.addColorStop(1, "rgba(120,140,255,0)");

@@ -1,7 +1,7 @@
 <h1 align="center">AirMesh</h1>
 
 <p align="center">
-  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a portal that makes you vanish, a hand-played synth and an exploding F1 hologram"></a>
+  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a portal that makes you vanish, a hand-played synth, a turning night sky with hand-drawn constellations, a keep-up game and an exploding F1 hologram"></a>
   <br><sub>▶ Click for the full narrated launch video with sound</sub>
 </p>
 
