@@ -438,7 +438,7 @@ const pointing = h => fingerOut(h.lm, 1) && [2, 3, 4].every(k => !fingerOut(h.lm
 const palmOf = h => ({ x: (h.s[0].x + h.s[5].x + h.s[9].x + h.s[17].x) / 4, y: (h.s[0].y + h.s[5].y + h.s[9].y + h.s[17].y) / 4 });
 const shapes = {
   name: "Shapes",
-  get help() { return `shape: ${SHAPES[SS.shape][0]}\none hand: 1–5 fingers picks a shape · pinch → dim / bright\ntwo hands: pinch with the empty hand to catch it — it flies over and changes`; },
+  get help() { return `shape: ${SHAPES[SS.shape][0]}\none hand: 1–5 fingers picks a shape · pinch → dim / bright\ntwo hands: pinch with the empty hand to catch it — it flies over and changes\nthe hand holding it: spread thumb + index → bigger, close them → smaller`; },
   draw(now) {
     if (hands.length) {
       if (hands.length === 2) {
@@ -455,7 +455,9 @@ const shapes = {
       }
       const hd = hands[pass.holder], c = palmOf(hd), w = hd.s[0], m = hd.s[9];
       ST.cx = c.x; ST.cy = c.y - d(w, m) * .9; // float just above the palm
-      ST.rot = Math.atan2(m.y - w.y, m.x - w.x) + Math.PI / 2; ST.scale = Math.max(40, d(w, m) * 1.15);
+      // two hands: the holder's thumb–index spread sizes it (~0.5× closed to ~2.4× wide open); one hand: follows the hand's size
+      const grow = hands.length === 2 ? .35 + clamp(hd.pinch, .1, 1.5) * 1.4 : 1;
+      ST.rot = Math.atan2(m.y - w.y, m.x - w.x) + Math.PI / 2; ST.scale = Math.max(40, d(w, m) * 1.15 * grow);
     } else { ST.hue = (ST.hue + .2) % 360; pass.from = null; }
 
     if (pass.from) { // in flight: an arc from where it was to the catching palm
