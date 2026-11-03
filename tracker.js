@@ -23,7 +23,11 @@ onmessage = async ({ data }) => {
     if (data.type === "init") {
       await loadBundle();
       const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-      hand = await create(HandLandmarker, fileset, MODELS + "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", { numHands: 2 });
+      hand = await create(HandLandmarker, fileset, MODELS + "hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", {
+        numHands: 2,
+        // below the 0.5 defaults so hands seen from the side (a camera off to one side) keep being found and tracked
+        minHandDetectionConfidence: .35, minHandPresenceConfidence: .35, minTrackingConfidence: .35,
+      });
       // first inference compiles GPU shaders (seconds): do it now, not on the user's first gesture
       const warm = new OffscreenCanvas(64, 64); warm.getContext("2d").fillRect(0, 0, 64, 64);
       hand.detectForVideo(warm, 0);
@@ -34,7 +38,7 @@ onmessage = async ({ data }) => {
       postMessage({ type: "ready" });
     } else if (data.type === "frame") {
       const { bitmap, t, wantSeg } = data;
-      const hands = hand.detectForVideo(bitmap, t).landmarks;
+      const found = hand.detectForVideo(bitmap, t), hands = found.landmarks, world = found.worldLandmarks; // world: metric 3D, so gestures read the same from any angle
       let mask = null;
       if (wantSeg && seg) try {
         const r = seg.segmentForVideo(bitmap, t), m = r.confidenceMasks[0];
@@ -45,7 +49,7 @@ onmessage = async ({ data }) => {
         r.close();
       } catch (e) { console.warn("segment failed", e); } // never lose the hands over the mask
       bitmap.close();
-      postMessage({ type: "result", hands, mask }, mask ? [mask.data.buffer] : []);
+      postMessage({ type: "result", hands, world, mask }, mask ? [mask.data.buffer] : []);
     }
   } catch (e) {
     data.bitmap?.close();
