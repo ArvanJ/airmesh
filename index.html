@@ -9,11 +9,13 @@
   #stage { position: fixed; inset: 0; width: 100%; height: 100%; }
   /* kept on-page (not display:none) so every browser keeps decoding frames */
   video { position: fixed; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
-  #hud { position: fixed; left: 24px; top: 20px; font-size: 13px; line-height: 1.7; white-space: pre; text-shadow: 0 1px 3px #000; pointer-events: none; }
-  #hud b { font-size: 20px; letter-spacing: .12em; color: #7ff0e8; }
-  #status { position: fixed; right: 24px; top: 20px; letter-spacing: .15em; font-size: 16px; text-shadow: 0 1px 4px #000; pointer-events: none; }
-  #rec { position: fixed; right: 24px; top: 52px; font: 13px ui-monospace, Menlo, monospace; letter-spacing: .1em; color: #dff; background: rgba(5,10,15,.78); border: 1px solid #7ff0e8; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
-  #rec.on { color: #fff; background: #c0263a; border-color: #ff6a7a; }
+  /* light glass UI: white strips and pills over the camera */
+  #hud { position: fixed; left: 16px; top: 16px; font-size: 12px; line-height: 1.65; white-space: pre; color: #1b1e22; background: rgba(255,255,255,.88); padding: 8px 14px; border-radius: 6px; box-shadow: 0 2px 14px rgba(0,0,0,.18); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); pointer-events: none; }
+  #hud b { font-weight: 600; color: #1b1e22; }
+  #hud .dim { color: #6b7280; }
+  #status { display: none; }
+  #rec { position: fixed; right: 16px; top: 16px; font: 500 13px system-ui, -apple-system, "Segoe UI", sans-serif; color: #1b1e22; background: rgba(255,255,255,.88); border: 0; border-radius: 999px; padding: 8px 16px; cursor: pointer; box-shadow: 0 2px 14px rgba(0,0,0,.18); }
+  #rec.on { color: #fff; background: #d6334a; }
 </style>
 </head>
 <body>
@@ -31,7 +33,8 @@ const $ = id => document.getElementById(id);
 const video = $("video"), stage = $("stage"), ctx = stage.getContext("2d"), hud = $("hud"), status = $("status");
 const TAU = Math.PI * 2, R = Math.random;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const FONT = "13px ui-monospace, Menlo, monospace";
+const FONT = "500 13px system-ui, -apple-system, \"Segoe UI\", sans-serif";
+const UI = { pill: "rgba(255,255,255,.88)", ink: "#1b1e22", on: "#2f7d55", shadow: "rgba(0,0,0,.22)" }; // light glass pills, green = active
 
 // ---- screen <-> camera mapping (video is drawn mirrored, "cover" fit) ----
 let W, H, map;
@@ -73,25 +76,28 @@ function pickedCount() {
 }
 
 // ---- small drawing helpers ----
-function marker(x, y, color = "#4ade80") {
-  ctx.save(); ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 16;
-  ctx.fillRect(x - 8, y - 8, 16, 16); ctx.restore();
+function marker(x, y, color = "#fff") {
+  ctx.save(); ctx.fillStyle = color; ctx.shadowColor = UI.shadow; ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.arc(x, y, 6, 0, TAU); ctx.fill(); ctx.restore();
 }
-function tag(text, x, y, color = "#7ff0e8") {
+// white pill label; the colour is a small dot on the left
+function tag(text, x, y, color = UI.on) {
   ctx.save(); ctx.font = FONT;
-  const w = ctx.measureText(text).width + 16; x = clamp(x, 8, W - w - 8); y = clamp(y, 20, H - 20);
-  ctx.fillStyle = "rgba(5,10,15,.78)"; ctx.fillRect(x, y - 12, w, 24);
-  ctx.strokeStyle = color; ctx.strokeRect(x, y - 12, w, 24);
-  ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.fillText(text, x + 8, y);
+  const w = ctx.measureText(text).width + 34; x = clamp(x, 8, W - w - 8); y = clamp(y, 20, H - 20);
+  ctx.fillStyle = UI.pill; ctx.shadowColor = UI.shadow; ctx.shadowBlur = 10;
+  ctx.beginPath(); ctx.roundRect(x, y - 14, w, 28, 14); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x + 14, y, 4, 0, TAU); ctx.fill();
+  ctx.fillStyle = UI.ink; ctx.textBaseline = "middle"; ctx.fillText(text, x + 24, y);
   ctx.restore();
 }
 
 // =====================================================================
 // MODE 2: Portal — thumb+index of both hands frame a live camera filter
 // =====================================================================
-const EFFECTS = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Glitch",
+const EFFECTS = ["Heatmap", "Anime", "Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Glitch",
   "Cutout", "Ghost", "Invisible", "Predator", "Echo"];
-const SEG_FX = ["Cutout", "Ghost", "Invisible", "Predator", "Echo"]; // these need the person/background mask
+const SEG_FX = ["Heatmap", "Cutout", "Ghost", "Invisible", "Predator", "Echo"];
+const SPARKLY = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray"]; // filters that get random white sparks // these need the person/background mask
 const needsSeg = () => SEG_FX.includes(EFFECTS[effect]);
 const THERMAL = [[0, 0, 40], [90, 0, 170], [230, 0, 90], [255, 150, 0], [255, 255, 180]];
 const SPARK = [[255, 255, 255], [255, 120, 220], [255, 230, 120], [160, 255, 230]];
@@ -142,12 +148,22 @@ function inpaint(w, h) {
 const blueprint = l => l < .25 ? [8, 10, 70] : l < .5 ? [25, 40, 190] : l < .72 ? [60, 120, 255] : [190, 215, 255];
 const thermal = l => { const t = l * 3.999, i = Math.floor(t), f = t - i, p = THERMAL[i], q = THERMAL[i + 1];
   return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, p[2] + (q[2] - p[2]) * f]; };
+const jet = v => [4 * v - 3, 4 * v - 2, 4 * v - 1].map(t => clamp(1.5 - Math.abs(t), 0, 1) * 255); // the classic blue→cyan→yellow→red heat map
+console.assert(jet(0)[2] > 100 && jet(1)[0] > 100 && jet(.5)[1] === 255, "jet self-check failed");
 const rainbow = a => [128 + 127 * Math.cos(a), 128 + 127 * Math.cos(a + 2.09), 128 + 127 * Math.cos(a + 4.19)];
 const at = (buf, stride, x, y, w, h) => (clamp(y, 0, h - 1) * w + clamp(x, 0, w - 1)) * stride;
 // l: luminance 0..1, gx/gy: Sobel gradient of l, m: person confidence 0..1, (x, y)/(w, h): pixel position, i: pixel index
 function fx(l, r, g, b, gx, gy, m, x, y, w, h, i) {
   const e = Math.min(1, Math.hypot(gx, gy) * 1.5), cover = clamp((m - .25) / .3, 0, 1); // cover: how much "you" is here
   switch (EFFECTS[effect]) {
+    case "Heatmap": return jet(clamp(.15 + .3 * l + .5 * cover, 0, 1)); // you run hot, the room stays cool
+    case "Anime": { // cel shading: smoothed colour in 3 light bands, punchier saturation, thin ink on strong edges
+      if (e > .3) return [45, 30, 55];
+      let sr = 0, sg = 0, sb = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const q = at(src, 4, x + dx, y + dy, w, h); sr += src[q]; sg += src[q + 1]; sb += src[q + 2]; }
+      sr /= 9; sg /= 9; sb /= 9;
+      const lv = (.3 * sr + .59 * sg + .11 * sb) / 255, band = lv < .28 ? .6 : lv < .6 ? .9 : 1.12, avg = (sr + sg + sb) / 3;
+      return [sr, sg, sb].map(c => clamp((avg + (c - avg) * 1.6) * band + 12, 0, 255)); }
     case "Blueprint": return blueprint(l);
     case "Thermal": return thermal(l);
     case "Matrix": { const q = Math.round(l * 4) / 4; return [0, q * 255, q * 90]; }
@@ -236,7 +252,7 @@ const portal = {
         gy = lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1] - lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1];
       }
       const c = needsSeg() && !seg ? [px[o], px[o + 1], px[o + 2]] // plain camera until the first mask arrives
-        : effect < 5 && l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, px[o], px[o + 1], px[o + 2], gx, gy, seg ? seg[o] / 255 : 1, x, y, w, h, i);
+        : SPARKLY.includes(EFFECTS[effect]) && l > .55 && R() < .04 ? SPARK[(R() * SPARK.length) | 0] : fx(l, px[o], px[o + 1], px[o + 2], gx, gy, seg ? seg[o] / 255 : 1, x, y, w, h, i);
       px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2];
     }
     sctx.putImageData(img, 0, 0);
@@ -244,13 +260,13 @@ const portal = {
     ctx.save();
     ctx.beginPath(); quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
     ctx.save(); ctx.clip(); ctx.imageSmoothingEnabled = false; ctx.drawImage(small, 0, 0, w * PIX, h * PIX); ctx.restore();
-    ctx.strokeStyle = "#3b82f6"; ctx.lineWidth = 2; ctx.shadowColor = "#3b82f6"; ctx.shadowBlur = 12; ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.shadowColor = UI.shadow; ctx.shadowBlur = 10; ctx.stroke();
     ctx.restore();
     quad.forEach(p => marker(p.x, p.y));
-    if (needsSeg() && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40, "#3b82f6");
+    if (needsSeg() && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40);
     else if ((EFFECTS[effect] === "Invisible" || EFFECTS[effect] === "Predator") && unseen > .25)
-      tag("sway side to side: the background behind you sharpens as I see it", W / 2 - 250, H - 120, "#3b82f6");
-    tag(`${EFFECTS[effect].toUpperCase()}  ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28, "#3b82f6");
+      tag("sway side to side: the background behind you sharpens as I see it", W / 2 - 250, H - 120);
+    tag(`${EFFECTS[effect]} · ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28);
   },
 };
 
@@ -1050,18 +1066,20 @@ const keepup = {
 const DWELL_MS = 700, rows = []; // rows drawn this frame, for click hit-testing
 function chipRow(names, active, y, dwell, dt, onPick) {
   ctx.save(); ctx.font = FONT; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  const widths = names.map(n => ctx.measureText(n).width + 28), gap = 8, h = 34;
+  const widths = names.map(n => ctx.measureText(n).width + 30), gap = 8, h = 34;
   let x = (W - widths.reduce((a, b) => a + b + gap, -gap)) / 2;
   const chips = widths.map(w => { const r = { x, y, w, h }; x += w + gap; return r; });
-  ctx.fillStyle = "rgba(10,14,20,.72)"; ctx.beginPath(); ctx.roundRect(chips[0].x - 10, y - 8, x - gap - chips[0].x + 20, h + 16, 12); ctx.fill();
   chips.forEach((r, i) => {
     const over = hands.some(hd => { const p = hd.s[8]; return p.x > r.x && p.x < r.x + r.w && p.y > r.y - 12 && p.y < r.y + r.h + 12; });
     dwell[i] = over && i !== active ? dwell[i] + dt : 0;
     if (dwell[i] > DWELL_MS) { dwell[i] = 0; onPick(i); }
-    ctx.strokeStyle = i === active ? "#f5c542" : "rgba(255,255,255,.25)"; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
-    ctx.fillStyle = i === active ? "#f5c542" : "#dfe"; ctx.fillText(names[i], r.x + r.w / 2, r.y + r.h / 2);
-    if (dwell[i] > 0) { ctx.fillStyle = "#7ff0e8"; ctx.fillRect(r.x, r.y + r.h - 3, r.w * dwell[i] / DWELL_MS, 3); }
+    ctx.fillStyle = i === active ? UI.on : UI.pill; ctx.shadowColor = UI.shadow; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, h / 2); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.fillStyle = i === active ? "#fff" : UI.ink; ctx.fillText(names[i], r.x + r.w / 2, r.y + r.h / 2);
+    if (dwell[i] > 0) { // dwell progress fills the pill from the left
+      ctx.save(); ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, h / 2); ctx.clip();
+      ctx.fillStyle = "rgba(47,125,85,.35)"; ctx.fillRect(r.x, r.y, r.w * dwell[i] / DWELL_MS, r.h); ctx.restore();
+    }
   });
   ctx.restore();
   rows.push({ chips, onPick });
@@ -1622,7 +1640,7 @@ let CONN = [];
 function background() {
   if (video.readyState >= 2) {
     ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(video, map.ox, map.oy, map.dw, map.dh); ctx.restore();
-    ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(0,0,0,.15)"; ctx.fillRect(0, 0, W, H); // just enough to lift the overlays
   } else { ctx.fillStyle = "#05070a"; ctx.fillRect(0, 0, W, H); }
 }
 function drawHands() {
@@ -1714,6 +1732,7 @@ function toggleRec() {
 recBtn.addEventListener("click", toggleRec);
 
 let last = performance.now(), hudHtml = "";
+const fps = { avg: 60, shown: 60, t: 0 };
 function frame(now) {
   const dt = now - last; last = now;
   rows.length = 0;
@@ -1725,7 +1744,9 @@ function frame(now) {
   if (!MODES[mode].noSparks) sparkles(now);
   MODES.forEach(m => m !== MODES[mode] && m.leave?.());
   modeBar(dt);
-  const html = `${startError}<b>${MODES[mode].name.toUpperCase()}</b>\n${MODES[mode].help}\n\nhover a fingertip on a mode below to switch · keys 1–${MODES.length}`;
+  if (now - fps.t > 500) { fps.shown = Math.round(fps.avg); fps.t = now; } // refresh the number twice a second, not every frame
+  fps.avg += (1000 / Math.max(dt, 1) - fps.avg) * .05;
+  const html = `${startError}<b>${MODES[mode].name}</b>   ${hands.length}/2 hands   ${fps.shown} FPS   tracking: ${status.textContent.toLowerCase()}\n<span class="dim">${MODES[mode].help}\nhover a mode below to switch · keys 1–${MODES.length} · R records</span>`;
   if (html !== hudHtml) hud.innerHTML = hudHtml = html; // only touch the DOM when the text changes
   if (recording) { const s = (now - recording.t0) / 1000 | 0, txt = `■ STOP ${s / 60 | 0}:${String(s % 60).padStart(2, "0")}`; if (recBtn.textContent !== txt) recBtn.textContent = txt; }
   requestAnimationFrame(frame);

@@ -51,11 +51,13 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | 9 | **Keep-up** | A mini game. Bounce glowing balls off your palms and don't let them drop. Swing up into a ball for a bigger hit. Every 10 hits adds another ball, and your best streak is saved. |
 
 ### Portal filters
-Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Predator** · **Echo**
+**Heatmap** · **Anime** · Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Predator** · **Echo**
 
 - **Neon edges, Cartoon, Sketch and Emboss** use OpenCV-style image processing: a 3×3 Sobel gradient computed on every frame.
+- **Heatmap** paints you hot (yellow to red) against a cool blue room, using a jet colour map plus the segmentation mask.
+- **Anime** is a cel-shading look: smoothed colour in three flat light bands, boosted saturation and thin ink lines on strong edges. It runs locally on every frame, so it restyles the camera image rather than redrawing you with AI.
 - **Glitch** tears the colour channels sideways in random bands, like a corrupted video signal.
-- **Cutout, Ghost, Invisible, Predator and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
+- **Heatmap, Cutout, Ghost, Invisible, Predator and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
   - **Cutout:** puts you in space.
   - **Ghost:** shows you as a heat signature over a blueprint world.
   - **Invisible:** makes you disappear. AirMesh learns the background wherever you *aren't* standing and paints it over you. Any part it has never seen gets filled in from the surroundings (push-pull inpainting, in the spirit of `cv.inpaint`), so you vanish right away and the fill sharpens as you sway side to side.
