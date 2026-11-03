@@ -102,8 +102,8 @@ function tag(text, x, y, color = UI.on) {
 // MODE 2: Portal — thumb+index of both hands frame a live camera filter
 // =====================================================================
 const EFFECTS = ["Heatmap", "Anime", "Live AI", "Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Glitch",
-  "Cutout", "Ghost", "Invisible", "Predator", "Echo"];
-const SEG_FX = ["Heatmap", "Cutout", "Ghost", "Invisible", "Predator", "Echo"];
+  "Cutout", "Ghost", "Invisible", "Echo"];
+const SEG_FX = ["Heatmap", "Cutout", "Ghost", "Invisible", "Echo"];
 const SPARKLY = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray"]; // filters that get random white sparks // these need the person/background mask
 const needsSeg = () => SEG_FX.includes(EFFECTS[effect]);
 const THERMAL = [[0, 0, 40], [90, 0, 170], [230, 0, 90], [255, 150, 0], [255, 255, 180]];
@@ -187,8 +187,6 @@ function fx(l, r, g, b, gx, gy, m, x, y, w, h, i) {
     case "Ghost": return m > .5 ? thermal(l) : blueprint(l);
     case "Invisible": { const o = i * 3; // swap "you" for the background learned from where you weren't
       return [r + (bg[o] - r) * cover, g + (bg[o + 1] - g) * cover, b + (bg[o + 2] - b) * cover]; }
-    case "Predator": { const o = at(bg, 3, x + Math.round(gx * 5), y + Math.round(gy * 5), w, h), rim = cover * (1 - cover) * 4; // bent background + shimmering outline
-      return [r + (bg[o] - r) * cover + 40 * rim, g + (bg[o + 1] - g) * cover + 90 * rim, b + (bg[o + 2] - b) * cover + 100 * rim]; }
     default: { const o = i * 3; return m > .5 ? [r, g, b] : [r * .6 + echo[o], g * .6 + echo[o + 1], b * .6 + echo[o + 2]]; } // Echo
   }
 }
@@ -321,7 +319,7 @@ const portal = {
         }
       }
       unseen = mine ? unseen / mine : 0; // share of "you" whose background was never seen
-      if (EFFECTS[effect] === "Invisible" || EFFECTS[effect] === "Predator") bg = inpaint(w, h);
+      if (EFFECTS[effect] === "Invisible") bg = inpaint(w, h);
     }
     if (EFFECTS[effect] === "Glitch") { // bands of rows share a random sideways tear
       let sh = 0; rowShift = [];
@@ -347,7 +345,7 @@ const portal = {
     ctx.restore();
     quad.forEach(p => marker(p.x, p.y));
     if (needsSeg() && !segMask) tag("finding you…", W / 2 - 60, H / 2 + 40);
-    else if ((EFFECTS[effect] === "Invisible" || EFFECTS[effect] === "Predator") && unseen > .25)
+    else if (EFFECTS[effect] === "Invisible" && unseen > .25)
       tag("sway side to side: the background behind you sharpens as I see it", W / 2 - 250, H - 120);
     tag(`${EFFECTS[effect]} · ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28);
   },
@@ -403,12 +401,12 @@ const CALLOUTS = [0, 550, 1100, 1650];
 let model = 1, targets = [];
 const setModel = n => { model = n; targets = Array.from({ length: NP }, (_, i) => MODELS[n][1](i)); };
 setModel(1);
-const view = { yaw: 0, pitch: .3, vy: 0, vx: 0, zoom: 1, boom: 0, cx: W / 2, cy: H / 2 };
+const view = { yaw: 0, pitch: .3, vy: 0, vx: 0, zoom: 1, boom: 0, cx: W / 2, cy: H / 2, size: 300, roll: 0 };
 let lastPalm = null, pinchAt = [0, 0]; // pinchAt: when each hand's pinch closed; quick release = tap, held = explode
 const TAP_MS = 350;
 const particles = {
   name: "Particles 3D",
-  get help() { return `model: ${MODELS[model][0]} — tap thumb + index for the next one\nmove your right hand → spin · spread both hands → zoom\npinch and hold → explode`; },
+  get help() { return `model: ${MODELS[model][0]} — tap thumb + index for the next one\none hand: it floats above your palm and tilts with your wrist\ntwo hands: it sits between them · move your right hand → spin · spread → zoom\npinch and hold → explode`; },
   draw(now) {
     hands.forEach((h, i) => {
       if (h.pinch < PINCH && !pinchAt[i]) pinchAt[i] = now;
@@ -417,18 +415,25 @@ const particles = {
     for (let i = hands.length; i < 2; i++) pinchAt[i] = 0;
     if (model === 6 && hands.length) liveHand(hands[0].lm);
     if (model === 7 && segMask) liveYou(segMask);
-    const drv = hands[hands.length - 1];
+    const drv = hands.length === 2 ? hands[1] : null; // with one hand the object rides the palm, so moving it shouldn't also spin it
     if (drv) { const p = drv.s[9]; if (lastPalm) { view.vy += (p.x - lastPalm.x) * .0003; view.vx += (p.y - lastPalm.y) * .0003; } lastPalm = p; }
     else lastPalm = null;
     view.vy *= .94; view.vx *= .94;
     view.yaw += view.vy + .003; view.pitch = clamp(view.pitch + view.vx, -1.4, 1.4);
     if (hands.length === 2) view.zoom += (clamp(d(hands[0].s[8], hands[1].s[8]) / (W * .3), .4, 3) - view.zoom) * .15;
     view.boom += ((pinchAt.some(t => t && now - t > TAP_MS) ? 1 : 0) - view.boom) * .08;
-    const tx = hands.length === 2 ? (hands[0].s[9].x + hands[1].s[9].x) / 2 : W / 2;
-    const ty = hands.length === 2 ? (hands[0].s[9].y + hands[1].s[9].y) / 2 : H / 2;
-    view.cx += (tx - view.cx) * .15; view.cy += (ty - view.cy) * .15;
+    let tx = W / 2, ty = H / 2, ts = Math.min(W, H) * .32, tr = 0;
+    if (hands.length === 2) { tx = (hands[0].s[9].x + hands[1].s[9].x) / 2; ty = (hands[0].s[9].y + hands[1].s[9].y) / 2; ts *= view.zoom; }
+    else if (hands.length === 1) { // hover just above the palm, sized to the hand, tilted with the wrist, bobbing a little
+      const h = hands[0], c = palmOf(h), w = h.s[0], m = h.s[9], hs = d(w, m);
+      tr = Math.atan2(m.y - w.y, m.x - w.x) + Math.PI / 2;
+      tx = c.x + Math.sin(tr) * hs * 1.5; ty = c.y - Math.cos(tr) * hs * 1.5 + Math.sin(now / 600) * hs * .06; ts = hs * 1.1;
+    }
+    const k = hands.length === 1 ? .35 : .15; // follow the hand closely so it feels attached
+    view.cx += (tx - view.cx) * k; view.cy += (ty - view.cy) * k; view.size += (ts - view.size) * k;
+    view.roll += (((tr - view.roll + 3 * Math.PI) % TAU) - Math.PI) * .2; // shortest way round
 
-    const base = Math.min(W, H) * .32 * view.zoom, b = view.boom;
+    const base = view.size, b = view.boom, cr = Math.cos(view.roll), sr = Math.sin(view.roll);
     const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw), cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
     const proj = [];
     ctx.save(); ctx.globalCompositeOperation = "lighter";
@@ -438,7 +443,7 @@ const particles = {
       const x = c[0] * (1 + b * .8) + jit[i][0] * b * 1.6, y = c[1] * (1 + b * .8) + jit[i][1] * b * 1.6, z = c[2] * (1 + b * .8) + jit[i][2] * b * 1.6;
       const x1 = x * cy - z * sy, z1 = x * sy + z * cy, y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
       if (z2 < -3.5) continue;
-      const f = base * 4 / (z2 + 4), sx = view.cx + x1 * f, syy = view.cy + y1 * f;
+      const f = base * 4 / (z2 + 4), sx = view.cx + (x1 * cr - y1 * sr) * f, syy = view.cy + (x1 * sr + y1 * cr) * f;
       if (CALLOUTS.includes(i)) proj.push([i, sx, syy, x, y, z]);
       ctx.fillStyle = `hsl(${(now / 40 + y * 90 + model * 50) % 360 | 0}, 90%, ${clamp(55 - z2 * 15, 25, 75) | 0}%)`;
       const s = clamp(f / base * 1.8, .6, 4); ctx.fillRect(sx - s / 2, syy - s / 2, s, s);

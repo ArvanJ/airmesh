@@ -41,7 +41,7 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | # | Mode | What your hands do |
 |---|------|--------------------|
 | 1 | **Portal** | Make an "L" with your thumb and index finger on **both** hands. The space between them becomes a live camera filter. **Tap thumb + index together** to switch to the next filter (or press **E**). |
-| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere, heart, **Your hand** (the particles copy your hand live, in 3D) or **You** (your whole silhouette, from person segmentation). Move your right hand to spin it, spread both hands to zoom, and pinch and hold to explode it. |
+| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere, heart, **Your hand** (the particles copy your hand live, in 3D) or **You** (your whole silhouette, from person segmentation). With one hand the model **floats above your palm**: it follows your hand, scales with it and tilts with your wrist. With two hands it sits between them: move your right hand to spin it and spread your hands to zoom. Pinch and hold to explode it. |
 | 3 | **Air Paint** | Pinch thumb and index to draw glowing strokes. Hold a fist to clear (or press **C**). **K** turns on a kaleidoscope. |
 | 4 | **Shapes** | A glowing shape rides your palm. **Pass it hand to hand:** pinch with your empty hand and it flies over in an arc, morphing into the next shape and colour mid-air, then bursts into sparks when you catch it. Spread the thumb and index of the hand holding it to make it bigger, and close them to shrink it. With one hand, 1–5 fingers pick the shape and a pinch sets the brightness. |
 | 5 | **Strings** | Your fingertips are strung together with neon light. **Curl a finger to pluck its string.** Longer strings play lower notes, and the string wobbles. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). Click once to turn on sound. |
@@ -51,18 +51,17 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | 9 | **Keep-up** | A mini game. Bounce glowing balls off your palms and don't let them drop. Swing up into a ball for a bigger hit. Every 10 hits adds another ball, and your best streak is saved. |
 
 ### Portal filters
-**Heatmap** · **Anime** · **Live AI** · Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Predator** · **Echo**
+**Heatmap** · **Anime** · **Live AI** · Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Echo**
 
 - **Neon edges, Cartoon, Sketch and Emboss** use OpenCV-style image processing: a 3×3 Sobel gradient computed on every frame.
 - **Heatmap** paints you hot (yellow to red) against a cool blue room, using a jet colour map plus the segmentation mask.
 - **Anime** is a cel-shading look: smoothed colour in three flat light bands, boosted saturation and thin ink lines on strong edges. It runs locally on every frame, so it restyles the camera image rather than redrawing you with AI.
 - **Live AI** sends your camera to [Decart](https://decart.ai)'s realtime restyle model (`lucy-restyle-2`), which redraws you as anime, Ghibli, comic or cyberpunk. The portal shows its picture inside your frame. It starts only when you press **Start Live AI**, runs for at most 60 seconds per session, and stops when you switch filters, drop the portal for 10 seconds or leave the tab. See [Live AI setup](#live-ai-setup).
 - **Glitch** tears the colour channels sideways in random bands, like a corrupted video signal.
-- **Heatmap, Cutout, Ghost, Invisible, Predator and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
+- **Heatmap, Cutout, Ghost, Invisible and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
   - **Cutout:** puts you in space.
   - **Ghost:** shows you as a heat signature over a blueprint world.
   - **Invisible:** makes you disappear. AirMesh learns the background wherever you *aren't* standing and paints it over you. Any part it has never seen gets filled in from the surroundings (push-pull inpainting, in the spirit of `cv.inpaint`), so you vanish right away and the fill sharpens as you sway side to side.
-  - **Predator:** a cloaking-device look. You turn see-through, the background bends through your outline and the edges shimmer.
   - **Echo:** leaves rainbow afterimages behind you as you move.
 
 ### X-Ray models
