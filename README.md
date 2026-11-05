@@ -1,8 +1,8 @@
 <h1 align="center">AirMesh</h1>
 
 <p align="center">
-  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a portal that makes you vanish, a hand-played synth, a turning night sky with hand-drawn constellations, a keep-up game and an exploding F1 hologram"></a>
-  <br><sub>▶ Click for the full narrated launch video with sound</sub>
+  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a finger-framed portal that turns you into a heatmap or makes you vanish, a hologram floating on a palm, a hand-played synth and three mini-games"></a>
+  <br><sub>▶ Click for the full launch video with sound</sub>
 </p>
 
 <p align="center"><b>Browser hand-tracking playground built by <a href="https://github.com/ArvanJ">@ArvanJ</a>, turning any webcam into an <a href="https://arvanj.github.io/airmesh/">Iron Man–style holographic workshop</a></b></p>
@@ -17,6 +17,7 @@
 <p align="center">
   <a href="https://arvanj.github.io/airmesh/">Live Demo</a> ·
   <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4">Launch Video</a> ·
+  <a href="#whats-new">What's New</a> ·
   <a href="#modes">Modes</a> ·
   <a href="#portal-filters">Portal Filters</a> ·
   <a href="#how-it-works">How It Works</a>
@@ -29,6 +30,23 @@
 ### ▶ Live: **https://arvanj.github.io/airmesh/**
 
 There is nothing to install. Open the link, allow the camera, and raise your hands. Use desktop Chrome, Edge or Safari with a webcam.
+
+---
+
+## What's new
+
+- **Three mini-games:** Keep-up (bounce balls off your palms), Bubbles (poke rising bubbles, chain combos) and Slice (swipe through tossed orbs). Best scores are saved in your browser.
+- **New portal filters:** Heatmap (you glow hot against a cool room) and Anime (cel-shaded cartoon look).
+- **Particles 3D floats on your palm:** hold up one hand and the hologram rides above it, scaling and tilting with your hand.
+- **Shapes resize:** spread or close the thumb and index of the hand holding the shape.
+- **Music:**
+  - Synth chords from your right hand's fingers.
+  - A 2-bar looper that records in time with the drum machine.
+  - Five live audio visualizers.
+  - Strings you pluck by curling a finger.
+- **Record clips:** the ● REC button (or **R**) saves what's on screen, with sound, as a video.
+- **A cleaner look:** a light glass interface with a status strip showing hands, FPS and tracking, white pill buttons, and a brighter camera feed.
+- **Better tracking from the side:** gestures are measured in 3D, so a camera off to one side still reads pinches and fingers correctly.
 
 ---
 
@@ -69,8 +87,12 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 
 - **Hand tracking:** [MediaPipe Tasks Vision](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker) HandLandmarker gives 21 landmarks per hand for 2 hands. It runs in a **Web Worker** (`tracker.js`) so inference never blocks drawing. Results are smoothed toward the newest detection every frame, which keeps motion fluid at 60–120 Hz. Gestures (pinch, finger count, string plucks) are measured on MediaPipe's 3D world landmarks, so they read the same when the camera is off to one side, and a hand that drops out for under 0.2 s is held instead of lost.
 - **Segmentation:** MediaPipe ImageSegmenter (selfie model). It runs only while a portal filter that needs it is active (Heatmap, Cutout, Ghost, Invisible, Echo) or the Particles 3D "You" model is showing.
-- **Rendering:** a Canvas 2D overlay on the mirrored camera feed. Particles 3D projects its point clouds by hand, with no 3D engine.
-- **Audio:** the Web Audio API. Two detuned oscillators and a sub oscillator feed a resonant low-pass filter and a feedback delay. An analyser drives the particle sphere.
+- **Rendering:** a Canvas 2D overlay on the mirrored camera feed. Particles 3D projects its point clouds by hand, with no 3D engine. Clips are recorded straight from the canvas with `MediaRecorder`.
+- **Audio:** the Web Audio API.
+  - **Synth voice:** two detuned oscillators and a sub oscillator, plus three chord voices, feed a resonant low-pass filter and a feedback delay.
+  - **Drums and looper:** the drum machine and the looper are scheduled ahead on the audio clock, so they never drift.
+  - **Visualizers:** an analyser feeds all five synth visualizers.
+  - **Plucks:** the Strings and game sounds come from a small plucked-string voice.
 - **No build step, no backend:** just `index.html` + `tracker.js`. MediaPipe and its models load from public CDNs.
 
 ### Privacy
