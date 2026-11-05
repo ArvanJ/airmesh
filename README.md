@@ -1,8 +1,8 @@
 <h1 align="center">AirMesh</h1>
 
 <p align="center">
-  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a finger-framed portal that turns you into a heatmap or makes you vanish, a hologram floating on a palm, a hand-played synth and three mini-games"></a>
-  <br><sub>▶ Click for the full launch video with sound</sub>
+  <a href="https://arvanj.github.io/airmesh/media/airmesh-launch.mp4"><img src="media/airmesh-preview.gif" width="760" alt="AirMesh launch video: neon strings between hands, a finger-framed portal that turns you into a heatmap or makes you vanish, a 3D particle sculpture between two hands, a hand-played synth and three mini-games"></a>
+  <br><sub>▶ Click for the full narrated launch video with sound</sub>
 </p>
 
 <p align="center"><b>Browser hand-tracking playground built by <a href="https://github.com/ArvanJ">@ArvanJ</a>, turning any webcam into an <a href="https://arvanj.github.io/airmesh/">Iron Man–style holographic workshop</a></b></p>
@@ -37,7 +37,6 @@ There is nothing to install. Open the link, allow the camera, and raise your han
 
 - **Three mini-games:** Keep-up (bounce balls off your palms), Bubbles (poke rising bubbles, chain combos) and Slice (swipe through tossed orbs). Best scores are saved in your browser.
 - **New portal filters:** Heatmap (you glow hot against a cool room) and Anime (cel-shaded cartoon look).
-- **Particles 3D floats on your palm:** hold up one hand and the hologram rides above it, scaling and tilting with your hand.
 - **Shapes resize:** spread or close the thumb and index of the hand holding the shape.
 - **Music:**
   - Synth chords from your right hand's fingers.
@@ -59,7 +58,7 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | # | Mode | What your hands do |
 |---|------|--------------------|
 | 1 | **Portal** | Make an "L" with your thumb and index finger on **both** hands. The space between them becomes a live camera filter. **Tap thumb + index together** to switch to the next filter (or press **E**). |
-| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere, heart, **Your hand** (the particles copy your hand live, in 3D) or **You** (your whole silhouette, from person segmentation). With one hand the model **floats above your palm**: it follows your hand, scales with it and tilts with your wrist. With two hands it sits between them: move your right hand to spin it and spread your hands to zoom. Pinch and hold to explode it. |
+| 2 | **Particles 3D** | **Tap thumb + index together** to switch to the next model: torus knot, DNA, galaxy, sphere, heart, **Your hand** (the particles copy your hand live, in 3D) or **You** (your whole silhouette, from person segmentation). The model sits between your hands: move your right hand to spin it and spread your hands to zoom. Pinch and hold to explode it. |
 | 3 | **Air Paint** | Pinch thumb and index to draw glowing strokes. Hold a fist to clear (or press **C**). **K** turns on a kaleidoscope. |
 | 4 | **Shapes** | A glowing shape rides your palm. **Pass it hand to hand:** pinch with your empty hand and it flies over in an arc, morphing into the next shape and colour mid-air, then bursts into sparks when you catch it. Spread the thumb and index of the hand holding it to make it bigger, and close them to shrink it. With one hand, 1–5 fingers pick the shape and a pinch sets the brightness. |
 | 5 | **Strings** | Your fingertips are strung together with neon light. **Curl a finger to pluck its string.** Longer strings play lower notes, and the string wobbles. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). Click once to turn on sound. |
