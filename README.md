@@ -24,7 +24,7 @@
 
 ---
 
-**Control a holographic workshop with your bare hands.** AirMesh is a browser playground that uses your webcam and computer vision to track both hands in real time. You can open camera-filter portals, sculpt 3D particles, paint in the air, weave neon strings, play a synthesizer and play keep-up with your palms.
+**Control a holographic workshop with your bare hands.** AirMesh is a browser playground that uses your webcam and computer vision to track both hands in real time. You can open camera-filter portals, sculpt 3D particles, paint in the air, weave neon strings, play a synthesizer and play three mini-games: keep-up, bubble popping and orb slicing.
 
 ### ▶ Live: **https://arvanj.github.io/airmesh/**
 
@@ -34,7 +34,7 @@ There is nothing to install. Open the link, allow the camera, and raise your han
 
 ## Modes
 
-Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, by clicking, or with keys **1–7**.
+Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, by clicking, or with keys **1–9**.
 
 **Record a clip** in any mode with the **● REC** button in the top-right corner (or press **R**). Press it again to stop, and the video downloads. If the sound is on when you start, it's recorded too.
 
@@ -46,7 +46,9 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | 4 | **Shapes** | A glowing shape rides your palm. **Pass it hand to hand:** pinch with your empty hand and it flies over in an arc, morphing into the next shape and colour mid-air, then bursts into sparks when you catch it. Spread the thumb and index of the hand holding it to make it bigger, and close them to shrink it. With one hand, 1–5 fingers pick the shape and a pinch sets the brightness. |
 | 5 | **Strings** | Your fingertips are strung together with neon light. **Curl a finger to pluck its string.** Longer strings play lower notes, and the string wobbles. Pick a theme: Normal, Cyberpunk, Lava, Ocean or Galaxy (or press **T** to cycle). Click once to turn on sound. |
 | 6 | **Synth** | Your left hand's height plays notes on a pentatonic scale. An open hand plays and a fist mutes. Your right hand controls the filter, echo and vibrato (pinch). **Chords:** hold up 1–4 right-hand fingers for power, major, minor or seventh chords; an open hand plays single notes. Five live visualizers read the real audio: **Spectrum**, **Ring**, **Scope**, **Orbit** (an X/Y phase scope, so a sine draws a circle and a square draws a square) and **Sphere** (press **V**). Add a **drum machine** to play over: Four, Hip-hop or Breaks at 110 BPM (press **B**). **Rec loop** (or **L**) records 2 bars of what you play in time with the beat, then loops it under you while you jam. Click once (or press **M**) to turn on audio. |
-| 7 | **Keep-up** | A mini game. Bounce glowing balls off your palms and don't let them drop. Swing up into a ball for a bigger hit. Every 10 hits adds another ball, and your best streak is saved. |
+| 7 | **Keep-up** | A mini-game. Bounce glowing balls off your palms and don't let them drop. Swing up into a ball for a bigger hit. Every 10 hits adds another ball, and your best streak is saved. |
+| 8 | **Bubbles** | A mini-game in 45-second rounds. Poke the bubbles floating up with any fingertip. Small ones score more, gold ones are worth 5, and popping quickly builds a combo up to ×5. |
+| 9 | **Slice** | A mini-game in 45-second rounds. Glowing orbs are tossed into the air: swipe your index finger fast through them to cut them in half. Cutting several in one swipe earns a bonus. |
 
 ### Portal filters
 **Heatmap** · **Anime** · Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Echo**

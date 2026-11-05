@@ -716,7 +716,7 @@ function startAudio() {
   out.connect(an).connect(ac.destination);
   audio = { ctx: ac, o: [o1, o2, sub], filter, amp, fb, wet, an, chord, bins: new Uint8Array(an.frequencyBinCount), wave: new Uint8Array(an.fftSize), beatBus, noise, next: 0, step: 0, beatStart: 0 };
 }
-stage.addEventListener("click", () => [synth, strings, keepup].includes(MODES[mode]) && startAudio());
+stage.addEventListener("click", () => [synth, strings, keepup, bubbles, slice].includes(MODES[mode]) && startAudio());
 const synth = {
   name: "Synth", hidesHands: true, noSparks: true,
   get help() { return audio ? `LEFT hand height → note · open hand plays, fist mutes\nRIGHT hand height → filter brightness · left/right → echo · pinch → wobble\nRIGHT fingers → chord: 1 power · 2 major · 3 minor · 4 seventh · open = single\nRec loop (or L) records 2 bars over the beat, then plays them back\nspread both hands → visual size · V visual · B beat · M mutes` : "click anywhere (or press M) to turn the sound on"; },
@@ -875,9 +875,35 @@ const synth = {
   },
 };
 
+// ---- mini-game helpers: saved best scores, the big score at the top, spark bursts, timed rounds ----
+const loadBest = name => { try { return +localStorage.getItem(`airmesh-${name}-best`) || 0; } catch { return 0; } };
+const saveBest = (name, v) => { try { localStorage.setItem(`airmesh-${name}-best`, v); } catch {} return v; };
+function scoreHud(score, best, sub = "") {
+  ctx.save(); ctx.textAlign = "right"; ctx.fillStyle = "#fff"; ctx.shadowColor = UI.shadow; ctx.shadowBlur = 16; // top-right, clear of the help panel
+  ctx.font = "700 72px system-ui, -apple-system, sans-serif"; ctx.fillText(score, W - 24, 128);
+  ctx.font = FONT; ctx.fillText(`BEST ${best}`, W - 24, 152); if (sub) ctx.fillText(sub, W - 24, 174);
+  ctx.restore();
+}
+function burst(x, y, hue, n = 24) {
+  for (let i = 0; i < n; i++) { const a = R() * TAU, v = 2 + R() * 5; sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, hue: (hue + R() * 60) % 360 }); }
+}
+// a timed round: starts when a hand shows up, runs ROUND_MS, then shows the result for a moment before the next one
+const ROUND_MS = 45000;
+function round(g, now) {
+  if (!g.end && hands.length && now - g.over > 2500) { g.end = now + ROUND_MS; g.score = 0; }
+  if (g.end && now > g.end) { g.end = 0; g.over = now; g.last = g.score; }
+  return g.end > 0;
+}
+const clock = (g, now) => g.end ? `${Math.ceil((g.end - now) / 1000)} s` : g.over > 0 ? `time! you scored ${g.last}` : "";
+// shortest distance from point p to segment a–b (how a swipe meets a ball)
+const segDist = (p, a, b) => {
+  const dx = b.x - a.x, dy = b.y - a.y, t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+};
+console.assert(segDist({ x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }) === 1 && segDist({ x: 3, y: 0 }, { x: -1, y: 0 }, { x: 1, y: 0 }) === 2, "segDist self-check failed");
+
 // ---- keep-up: bounce glowing balls off your palms and don't let them drop ----
-const ku = { balls: [], prev: [], score: 0, best: 0, lost: 0, flash: [] };
-try { ku.best = +localStorage.getItem("airmesh-keepup-best") || 0; } catch {}
+const ku = { balls: [], prev: [], score: 0, best: loadBest("keepup"), lost: 0, flash: [] };
 const kuSpawn = () => ku.balls.push({ x: W * (.3 + R() * .4), y: H * .12, vx: (R() - .5) * .2, vy: 0, hitT: 0, hue: R() * 360, trail: [] });
 const keepup = {
   name: "Keep-up",
@@ -912,9 +938,9 @@ const keepup = {
         if (now - b.hitT > 200) {
           b.hitT = now; ku.score++; b.hue = (b.hue + 40) % 360; ku.flash.push({ x: b.x, y: b.y, life: 1 });
           pluck(SCALE[ku.score % SCALE.length], .35);
-          for (let i = 0; i < 24; i++) { const a = R() * TAU, v = 2 + R() * 5; sparks.push({ x: b.x, y: b.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, hue: (b.hue + R() * 60) % 360 }); }
+          burst(b.x, b.y, b.hue);
           if (ku.score % 10 === 0 && ku.balls.length < 3) kuSpawn();
-          if (ku.score > ku.best) { ku.best = ku.score; try { localStorage.setItem("airmesh-keepup-best", ku.best); } catch {} }
+          if (ku.score > ku.best) ku.best = saveBest("keepup", ku.score);
         }
       }
       b.trail.push({ x: b.x, y: b.y }); if (b.trail.length > 14) b.trail.shift();
@@ -932,12 +958,117 @@ const keepup = {
     ku.flash = ku.flash.filter(f => (f.life -= dt / 400) > 0);
     for (const f of ku.flash) { ctx.strokeStyle = `rgba(255,255,255,${f.life})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(f.x, f.y, br * (3 - 2 * f.life), 0, TAU); ctx.stroke(); }
     ctx.restore();
-    ctx.save(); ctx.textAlign = "center"; ctx.fillStyle = "#fff"; ctx.shadowColor = "#7ff0e8"; ctx.shadowBlur = 20;
-    ctx.font = "bold 72px ui-monospace, Menlo, monospace"; ctx.fillText(ku.score, W / 2, 110);
-    ctx.shadowBlur = 0; ctx.font = FONT; ctx.fillStyle = "#7ff0e8"; ctx.fillText(`BEST ${ku.best}`, W / 2, 138);
-    ctx.restore();
+    scoreHud(ku.score, ku.best);
     if (waiting) tag("raise a hand to start", W / 2 - 90, H * .5);
     else if (now - ku.lost < 1500 && ku.last) tag(`dropped it! streak ${ku.last}`, W / 2 - 90, H * .5, "#ff6a7a");
+  },
+};
+
+// ---- bubbles: poke the bubbles floating up with any fingertip; quick pops chain into a combo ----
+const bb = { list: [], next: 0, score: 0, best: loadBest("bubbles"), end: 0, over: -1e9, last: 0, combo: 0, lastPop: -1e9, pops: [] };
+const bubbles = {
+  name: "Bubbles",
+  get help() { return `poke the bubbles with any fingertip before they float away\nsmall ones score more · gold ones are worth 5 · pop fast for a combo (up to ×5)\n45 s rounds · best: ${bb.best}${audio ? "" : " · click once for sound"}`; },
+  draw(now, dt) {
+    dt = Math.min(dt, 40);
+    const u = Math.min(W, H), playing = round(bb, now);
+    if (playing && now > bb.next) {
+      bb.next = now + 300 + R() * 300; const r = u * (.03 + R() * .05);
+      bb.list.push({ x: r + R() * (W - 2 * r), y: H + r, r, vy: -(.05 + R() * .08) * u / 800, ph: R() * TAU, hue: R() * 360, gold: R() < .06 });
+    }
+    if (now - bb.lastPop > 900) bb.combo = 0;
+    const tips = playing ? hands.flatMap(h => TIPS.map(i => h.s[i])) : [];
+    bb.list = bb.list.filter(b => {
+      b.y += b.vy * dt; b.x += Math.sin(now / 700 + b.ph) * .25;
+      if (tips.some(p => d(p, b) < b.r)) {
+        bb.combo++; bb.lastPop = now;
+        const pts = (b.gold ? 5 : b.r < u * .05 ? 2 : 1) * Math.min(bb.combo, 5);
+        bb.score += pts; bb.pops.push({ x: b.x, y: b.y, r: b.r, life: 1, txt: `+${pts}` });
+        burst(b.x, b.y, b.gold ? 40 : b.hue, 16); pluck(SCALE[clamp(15 - Math.round(b.r / u * 180), 0, 15)], .3); // smaller bubble, higher note
+        if (bb.score > bb.best) bb.best = saveBest("bubbles", bb.score);
+        return false;
+      }
+      return b.y > -b.r * 2;
+    });
+    ctx.save();
+    for (const b of bb.list) { // soap film: clear middle, coloured rim, a window highlight
+      const hue = b.gold ? 45 : b.hue, g = ctx.createRadialGradient(b.x - b.r * .3, b.y - b.r * .3, b.r * .1, b.x, b.y, b.r);
+      g.addColorStop(0, "rgba(255,255,255,.04)"); g.addColorStop(.75, `hsla(${hue}, 90%, 70%, ${b.gold ? .35 : .12})`); g.addColorStop(1, `hsla(${hue + 60}, 95%, 75%, .6)`);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
+      ctx.strokeStyle = `hsla(${hue + 30}, 95%, 80%, .8)`; ctx.lineWidth = b.gold ? 3 : 1.5; ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.beginPath(); ctx.ellipse(b.x - b.r * .38, b.y - b.r * .42, b.r * .18, b.r * .1, -.7, 0, TAU); ctx.fill();
+    }
+    bb.pops = bb.pops.filter(p => (p.life -= dt / 500) > 0);
+    ctx.textAlign = "center"; ctx.font = "700 20px system-ui, sans-serif";
+    for (const p of bb.pops) {
+      ctx.strokeStyle = `rgba(255,255,255,${p.life})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.6 - .6 * p.life), 0, TAU); ctx.stroke();
+      ctx.fillStyle = `rgba(255,255,255,${p.life})`; ctx.fillText(p.txt, p.x, p.y - (1 - p.life) * 40);
+    }
+    ctx.restore();
+    scoreHud(bb.score, bb.best, [bb.combo > 1 ? `combo ×${Math.min(bb.combo, 5)}` : "", clock(bb, now)].filter(Boolean).join("   ·   "));
+    if (!hands.length && !bb.end) tag("raise a hand to start a round", W / 2 - 110, H * .5);
+  },
+};
+
+// ---- slice: glowing orbs are tossed up; swipe your index finger fast through them to cut them in half ----
+const sl = { orbs: [], halves: [], next: 0, score: 0, best: loadBest("slice"), end: 0, over: -1e9, last: 0, prev: [], trail: [], swipeT: 0, swipeN: 0 };
+const slice = {
+  name: "Slice",
+  get help() { return `swipe your index finger fast through the orbs to cut them\ncut several in one swipe for a bonus\n45 s rounds · best: ${sl.best}${audio ? "" : " · click once for sound"}`; },
+  draw(now, dt) {
+    dt = Math.min(dt, 40);
+    const u = Math.min(W, H), g = H * 1.6e-6, playing = round(sl, now);
+    if (playing && now > sl.next) {
+      sl.next = now + 600 + R() * 500; const x = W * (.15 + R() * .7), r = u * (.045 + R() * .025);
+      sl.orbs.push({ x, y: H + r, r, vx: (W / 2 - x) / W * .5 + (R() - .5) * .2, vy: -Math.sqrt(2 * g * H * (.55 + R() * .3)), hue: R() * 360 });
+    }
+    // blades: each index fingertip; only a fast move (over ~0.7 px/ms) cuts
+    const blades = [];
+    hands.forEach((h, k) => {
+      const p = h.s[8], q = sl.prev[k]; sl.prev[k] = { x: p.x, y: p.y };
+      sl.trail.push({ x: p.x, y: p.y, t: now, k });
+      if (q && d(p, q) / dt > .7) blades.push([q, p]);
+    });
+    sl.prev.length = hands.length;
+    sl.trail = sl.trail.filter(p => now - p.t < 160);
+    if (now - sl.swipeT > 250) sl.swipeN = 0;
+    sl.orbs = sl.orbs.filter(o => {
+      o.vy += g * dt; o.x += o.vx * dt; o.y += o.vy * dt;
+      const cut = playing && blades.find(([a, b]) => segDist(o, a, b) < o.r);
+      if (cut) {
+        const ang = Math.atan2(cut[1].y - cut[0].y, cut[1].x - cut[0].x), nx = -Math.sin(ang) * .25, ny = Math.cos(ang) * .25;
+        for (const s of [1, -1]) sl.halves.push({ x: o.x, y: o.y, r: o.r, vx: o.vx + nx * s, vy: o.vy * .5 + ny * s, ang, side: s, spin: s * .004, hue: o.hue, life: 1 });
+        sl.swipeN++; sl.swipeT = now; sl.score += sl.swipeN; // the 2nd orb in one swipe is worth 2, the 3rd 3…
+        burst(o.x, o.y, o.hue, 20); pluck(SCALE[(sl.score * 3) % SCALE.length], .3);
+        if (sl.score > sl.best) sl.best = saveBest("slice", sl.score);
+        return false;
+      }
+      return !(o.vy > 0 && o.y > H + o.r * 2);
+    });
+    ctx.save(); ctx.globalCompositeOperation = "lighter";
+    for (const o of sl.orbs) {
+      const gr = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r * 1.6);
+      gr.addColorStop(0, "#fff"); gr.addColorStop(.45, `hsl(${o.hue}, 100%, 62%)`); gr.addColorStop(1, `hsla(${o.hue}, 100%, 50%, 0)`);
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(o.x, o.y, o.r * 1.6, 0, TAU); ctx.fill();
+    }
+    sl.halves = sl.halves.filter(h => (h.life -= dt / 900) > 0);
+    for (const h of sl.halves) { // each half spins away along the cut
+      h.vy += g * dt; h.x += h.vx * dt; h.y += h.vy * dt; h.ang += h.spin * dt;
+      ctx.fillStyle = `hsla(${h.hue}, 100%, 62%, ${h.life})`; ctx.beginPath();
+      ctx.arc(h.x, h.y, h.r, h.side > 0 ? h.ang : h.ang + Math.PI, h.side > 0 ? h.ang + Math.PI : h.ang + TAU); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,255,${h.life})`; ctx.lineWidth = 2; ctx.stroke(); // bright cut edge
+    }
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; // blade trails
+    for (const k of [0, 1]) {
+      const pts = sl.trail.filter(p => p.k === k); if (pts.length < 2) continue;
+      for (const [lw, al] of [[14, .2], [4, .95]]) {
+        ctx.strokeStyle = `rgba(200,240,255,${al})`; ctx.lineWidth = lw; ctx.beginPath();
+        pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+      }
+    }
+    ctx.restore();
+    scoreHud(sl.score, sl.best, [sl.swipeN > 1 ? `${sl.swipeN} in one swipe!` : "", clock(sl, now)].filter(Boolean).join("   ·   "));
+    if (!hands.length && !sl.end) tag("raise a hand to start a round", W / 2 - 110, H * .5);
   },
 };
 
@@ -968,7 +1099,7 @@ stage.addEventListener("click", e => rows.forEach(row => row.chips.forEach((r, i
 })));
 
 // ---- modes, bottom bar, keys ----
-const MODES = [portal, particles, paint, shapes, strings, synth, keepup];
+const MODES = [portal, particles, paint, shapes, strings, synth, keepup, bubbles, slice];
 let mode = 0;
 const dwell = MODES.map(() => 0);
 const modeBar = dt => chipRow(MODES.map(m => m.name), mode, H - 58, dwell, dt, i => mode = i);
