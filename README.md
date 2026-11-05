@@ -51,12 +51,11 @@ Switch modes by hovering a fingertip over the bottom bar for about 0.7 seconds, 
 | 9 | **Keep-up** | A mini game. Bounce glowing balls off your palms and don't let them drop. Swing up into a ball for a bigger hit. Every 10 hits adds another ball, and your best streak is saved. |
 
 ### Portal filters
-**Heatmap** · **Anime** · **Live AI** · Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Echo**
+**Heatmap** · **Anime** · Blueprint · Thermal · Matrix · Pop art · X-ray · **Neon edges** · **Cartoon** · **Sketch** · **Emboss** · **Night vision** · **Glitch** · **Cutout** · **Ghost** · **Invisible** · **Echo**
 
 - **Neon edges, Cartoon, Sketch and Emboss** use OpenCV-style image processing: a 3×3 Sobel gradient computed on every frame.
 - **Heatmap** paints you hot (yellow to red) against a cool blue room, using a jet colour map plus the segmentation mask.
 - **Anime** is a cel-shading look: smoothed colour in three flat light bands, boosted saturation and thin ink lines on strong edges. It runs locally on every frame, so it restyles the camera image rather than redrawing you with AI.
-- **Live AI** sends your camera to [Decart](https://decart.ai)'s realtime restyle model (`lucy-restyle-2`), which redraws you as anime, Ghibli, comic or cyberpunk. The portal shows its picture inside your frame. It starts only when you press **Start Live AI**, runs for at most 60 seconds per session, and stops when you switch filters, drop the portal for 10 seconds or leave the tab. See [Live AI setup](#live-ai-setup).
 - **Glitch** tears the colour channels sideways in random bands, like a corrupted video signal.
 - **Heatmap, Cutout, Ghost, Invisible and Echo** use MediaPipe selfie segmentation to separate you from the background. The mask is grown by 2px with a max filter (like `cv.dilate`) to hide your outline.
   - **Cutout:** puts you in space.
@@ -81,7 +80,7 @@ X-Ray keys: **X** explode · **H** hologram/solid · **+ / −** zoom · **↑ /
 - **No build step, no backend:** just `index.html` + `tracker.js`. All libraries and models load from public CDNs.
 
 ### Privacy
-Everything runs **locally in your browser**, with one opt-in exception. The **Live AI** portal filter streams your camera to Decart's servers while it is on, and only after you press **Start Live AI**. Every other mode and filter keeps camera frames on your device.
+Everything runs **locally in your browser**. Camera frames are never uploaded anywhere.
 
 ## Run it locally
 
@@ -94,26 +93,6 @@ python3 -m http.server 8000
 Then open http://localhost:8000.
 
 If you change `tracker.js`, bump the `?v=` number in `new Worker("tracker.js?v=…")` in `index.html`. Otherwise browsers may keep the cached worker for about 10 minutes.
-
-## Live AI setup
-
-Live AI needs a small token server so the Decart API key never reaches the browser. It's a Cloudflare Worker in [`worker/`](worker/). Each token it hands out:
-- works for one model (`lucy-restyle-2`) only
-- works only from AirMesh's own web address
-- has to start a session within 60 seconds
-- caps the session at 60 seconds
-- is limited to 3 per visitor per minute
-
-Deploy it once:
-
-```bash
-cd worker
-npx wrangler login
-npx wrangler secret put DECART_API_KEY
-npx wrangler deploy
-```
-
-Then set `AI_TOKEN_URL` in `index.html` to the URL `wrangler deploy` prints. Decart bills $0.01 per second of streaming (about $0.60 a minute), so set a spending limit in your Decart dashboard if it offers one. Run `node worker/test.mjs` to check the worker.
 
 ## Credits
 

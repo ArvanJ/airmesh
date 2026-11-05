@@ -101,7 +101,7 @@ function tag(text, x, y, color = UI.on) {
 // =====================================================================
 // MODE 2: Portal — thumb+index of both hands frame a live camera filter
 // =====================================================================
-const EFFECTS = ["Heatmap", "Anime", "Live AI", "Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Glitch",
+const EFFECTS = ["Heatmap", "Anime", "Blueprint", "Thermal", "Matrix", "Pop art", "X-ray", "Neon edges", "Cartoon", "Sketch", "Emboss", "Night vision", "Glitch",
   "Cutout", "Ghost", "Invisible", "Echo"];
 const SEG_FX = ["Heatmap", "Cutout", "Ghost", "Invisible", "Echo"];
 const SPARKLY = ["Blueprint", "Thermal", "Matrix", "Pop art", "X-ray"]; // filters that get random white sparks // these need the person/background mask
@@ -206,95 +206,19 @@ function maskPixels(w, h) {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let v = 0; for (let k = -2; k <= 2; k++) v = Math.max(v, tmp[clamp(y + k, 0, h - 1) * w + x]); out[(y * w + x) * 4] = v; }
   return out;
 }
-// ---- Live AI: Decart's realtime restyle model redraws the camera; the portal shows it inside your frame ----
-// The browser never sees the Decart key: the AirMesh token server (worker/) hands out 60 s tokens for 60 s sessions.
-const AI_TOKEN_URL = ""; // set to the deployed worker's URL, e.g. https://airmesh-tokens.<you>.workers.dev
-const AI_SDK = "https://cdn.jsdelivr.net/npm/@decartai/sdk@0.2.12/+esm";
-const AI_MAX_MS = 60000, AI_IDLE_MS = 10000; // hard stop per session; stop when the portal has been down this long
-const AI_STYLES = [
-  ["Anime", "anime style, cel shaded, clean line art, big expressive eyes, vibrant colors"],
-  ["Ghibli", "Studio Ghibli animation style, soft painted colors"],
-  ["Comic", "comic book style, bold ink outlines, halftone shading"],
-  ["Cyberpunk", "cyberpunk style, neon lights, futuristic"],
-];
-const ai = { state: "off", rc: null, track: null, video: document.createElement("video"), style: 0, start: 0, seen: 0, msg: "", dwell: [0], styleDwell: AI_STYLES.map(() => 0) };
-ai.video.muted = ai.video.playsInline = true;
-async function aiStart() {
-  if (ai.state !== "off") return;
-  if (!AI_TOKEN_URL) { ai.msg = "Live AI isn't set up on this copy yet (no token server)"; return; }
-  if (!video.srcObject) { ai.msg = "Live AI needs the camera"; return; }
-  ai.state = "connecting"; ai.msg = ""; ai.start = ai.seen = performance.now();
-  try {
-    const { createDecartClient, models } = await import(AI_SDK);
-    const model = models.realtime("lucy-restyle-2");
-    ai.track = video.srcObject.getVideoTracks()[0].clone(); // our own copy, sized for the model; the hand tracker keeps the original
-    await ai.track.applyConstraints({ width: model.width, height: model.height, frameRate: model.fps }).catch(() => {});
-    const client = createDecartClient({ apiKeyProvider: async () => {
-      const r = await fetch(AI_TOKEN_URL, { method: "POST" });
-      if (!r.ok) throw new Error(r.status === 429 ? "Live AI is busy, try again in a minute" : `token server error ${r.status}`);
-      return (await r.json()).apiKey;
-    } });
-    const rc = await client.realtime.connect(new MediaStream([ai.track]), {
-      model,
-      onRemoteStream: s => { ai.video.srcObject = s; ai.video.play().catch(() => {}); },
-      initialState: { prompt: { text: AI_STYLES[ai.style][1], enhance: true } },
-    });
-    if (ai.state !== "connecting") return rc.disconnect(); // stopped while we were dialling
-    ai.rc = rc; ai.state = "live";
-    rc.on("connectionChange", st => { if (st === "disconnected" && ai.rc === rc) aiStop(); });
-    rc.on("error", e => { ai.msg = e.message; });
-  } catch (e) { aiStop(e.message || "Live AI couldn't connect"); }
-}
-function aiStop(msg = "") {
-  const rc = ai.rc; ai.rc = null; ai.state = "off"; ai.msg = msg;
-  rc?.disconnect(); ai.track?.stop(); ai.track = null; ai.video.srcObject = null;
-}
-addEventListener("visibilitychange", () => document.hidden && ai.state !== "off" && aiStop()); // never stream (or pay) from a background tab
-function drawLiveAI(quad, now) {
-  if (ai.state !== "off") {
-    ai.seen = now;
-    if (now - ai.start > AI_MAX_MS) aiStop("60 s demo limit reached, start again for more");
-  }
-  const vw = ai.video.videoWidth, vh = ai.video.videoHeight;
-  ctx.save(); ctx.beginPath(); quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.clip();
-  if (ai.state === "live" && vw) { // same mirrored cover-fit as the camera, so the AI picture lines up with you
-    const k = Math.max(W / vw, H / vh);
-    ctx.translate(W, 0); ctx.scale(-1, 1); ctx.drawImage(ai.video, (W - vw * k) / 2, (H - vh * k) / 2, vw * k, vh * k);
-  } else { ctx.fillStyle = "rgba(255,255,255,.18)"; ctx.fillRect(0, 0, W, H); }
-  ctx.restore();
-  const cx = (quad[0].x + quad[1].x) / 2 - 120, cy = (quad[0].y + quad[3].y) / 2;
-  if (ai.state === "off") {
-    if (ai.msg) tag(ai.msg, cx - 60, cy - 40, "#d6334a");
-    chipRow(["Start Live AI · sends your camera to Decart"], -1, H - 110, ai.dwell, 16, () => aiStart());
-  } else if (ai.state !== "live" || !vw) tag("connecting to Decart…", cx, cy);
-  else {
-    tag(`${Math.ceil((AI_MAX_MS - (now - ai.start)) / 1000)} s left`, quad[1].x - 90, quad[0].y - 28);
-    chipRow(AI_STYLES.map(s => s[0]), ai.style, H - 110, ai.styleDwell, 16, i => { ai.style = i; ai.rc?.setPrompt(AI_STYLES[i][1], { enhance: true }); });
-  }
-}
 const portal = {
   name: "Portal",
-  leave() { if (ai.state !== "off") aiStop(); },
   get help() { return `make an L with thumb + index on BOTH hands\nthe space between them becomes a live filter\nfilter: ${EFFECTS[effect]} — tap thumb + index together (or E) for the next one`; },
   draw(now) {
     hands.forEach((h, i) => { // tap = pinch closes after being open (hysteresis stops flicker re-triggering)
       if (h.pinch < PINCH && !tapped[i]) { tapped[i] = true; effect = (effect + 1) % EFFECTS.length; }
       else if (h.pinch > .5) tapped[i] = false;
     });
-    if (ai.state !== "off" && (EFFECTS[effect] !== "Live AI" || now - ai.seen > AI_IDLE_MS)) aiStop();
     if (hands.length < 2 || video.readyState < 2) {
       tag("raise both hands — thumb + index make the corners", W / 2 - 200, H / 2);
       return;
     }
     const [L, Rh] = hands, quad = [L.s[8], Rh.s[8], Rh.s[4], L.s[4]];
-    if (EFFECTS[effect] === "Live AI") {
-      drawLiveAI(quad, now);
-      ctx.save(); ctx.beginPath(); quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
-      ctx.strokeStyle = "rgba(255,255,255,.95)"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.shadowColor = UI.shadow; ctx.shadowBlur = 10; ctx.stroke(); ctx.restore();
-      quad.forEach(p => marker(p.x, p.y));
-      tag(`Live AI · ${effect + 1}/${EFFECTS.length}`, Math.min(...quad.map(p => p.x)), Math.min(...quad.map(p => p.y)) - 28);
-      return;
-    }
 
     // low-res mirrored copy of the screen, recoloured per pixel
     const w = Math.ceil(W / PIX), h = Math.ceil(H / PIX);
@@ -1837,7 +1761,7 @@ function frame(now) {
   modeBar(dt);
   if (now - fps.t > 500) { fps.shown = Math.round(fps.avg); fps.t = now; } // refresh the number twice a second, not every frame
   fps.avg += (1000 / Math.max(dt, 1) - fps.avg) * .05;
-  const html = `${startError}<b>${MODES[mode].name}</b>   ${hands.length}/2 hands   ${fps.shown} FPS   tracking: ${status.textContent.toLowerCase()}${MODES[mode] === portal && EFFECTS[effect] === "Live AI" ? `   AI: ${ai.state}` : ""}\n<span class="dim">${MODES[mode].help}\nhover a mode below to switch · keys 1–${MODES.length} · R records</span>`;
+  const html = `${startError}<b>${MODES[mode].name}</b>   ${hands.length}/2 hands   ${fps.shown} FPS   tracking: ${status.textContent.toLowerCase()}\n<span class="dim">${MODES[mode].help}\nhover a mode below to switch · keys 1–${MODES.length} · R records</span>`;
   if (html !== hudHtml) hud.innerHTML = hudHtml = html; // only touch the DOM when the text changes
   if (recording) { const s = (now - recording.t0) / 1000 | 0, txt = `■ STOP ${s / 60 | 0}:${String(s % 60).padStart(2, "0")}`; if (recBtn.textContent !== txt) recBtn.textContent = txt; }
   requestAnimationFrame(frame);
